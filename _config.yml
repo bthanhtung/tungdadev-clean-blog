@@ -1,0 +1,200 @@
+# ---------------- #
+#   Main Configs   #
+# ---------------- #
+baseurl:
+url: https://cristorvalds.org
+date_format: "ordinal"
+title: CrisDaDev
+subtitle: "SOFTWARE ENGINEER"
+description: "CRISDADEV"
+keywords: Cris Torvalds
+timezone: Asia/Ho_Chi_Minh
+encoding: "utf-8"
+# The year displayed in the lower left corner of the page
+since: 2015
+# Source code repository, please replace it with your own
+repository: 
+# CDN acceleration configuration for css and js resources
+cdn:
+    jsdelivr:
+        enabled: false
+# Optional component configuration
+components:
+    # share
+    # weibo,qq,wechat,douban,qzone,linkedin,facebook,twitter
+    share:
+        enabled: false
+        hide-platforms: qq,facebook
+    # Busuanzi visit statistics
+    busuanzi:
+        enabled: false
+        start_date: 2020-05-03
+    # My Popular Repositories
+    side_bar_repo:
+        enabled: true
+        limit: 5
+    # Article word count
+    word_count:
+        enabled: true
+    # The QR code in the upper right corner of the page and the "About" page
+    # Please replace the modified image: assets/images/qrcode.jpg
+    qrcode:
+        enabled: true
+        image_alt: CrisDaDev
+    # Which view to use for the wiki index page, list/category supported
+    wiki:
+        view: cate
+    # Image light box effect function
+    fancybox:
+        enabled: false
+# Compress page content
+compress_html:
+  clippings: all
+  comments: ["<!--", "-->"]
+# Code highlighting style, see the supported themes list https://github.com/mzlogin/rouge-themes
+highlight_theme: github
+
+# ---------------- #
+#      Author      #
+# ---------------- #
+author: CrisDaDev
+organization: 
+organization_url: 
+github_username: cristorvalds
+location: Ho Chi Minh, VietNam
+email: CrisDaDev@gmail.com
+
+# ---------------- #
+#    Navigation    #
+# ---------------- #
+navs:
+  -
+    href: /
+    label: Home
+
+  -
+    href: /categories/
+    label: Categories
+
+  -
+    href: /archives/
+    label: Archives
+    mobile-hidden: true
+
+  -
+    href: /fragments/
+    label: Fragments
+
+  -
+    href: /about/
+    label: About
+
+# ---------------- #
+#       RSS        #
+# ---------------- #
+subscribe_rss: /feed.xml
+
+# ---------------- #
+#      INDEX       #
+# ---------------- #
+index:
+    banner:
+        # Home page banner area text color
+        color: "#fff"
+        # Home page navigation bar text color
+        nav-color: "rgba(255, 255, 255, .5)"
+        # Home page banner area background color
+        background-color: "#4183c4"
+        # Home banner area background image
+        # background-image: "/assets/images/octicons-bg.png"
+        # background-repeat: "no-repeat"
+        # background-size: "cover"
+
+# ---------------- #
+#      Jekyll      #
+# ---------------- #
+markdown: kramdown
+kramdown:
+    input: GFM
+highlighter: rouge
+paginate: 10
+lsi: false
+quiet: false
+excerpt_separator: "\n\n"
+permalink: /:year/:month/:day/:title/
+plugins:
+    - jekyll-github-metadata
+    - rouge
+#     - jekyll-html-pipeline
+    - jekyll-paginate
+    - jekyll-sitemap
+    - jekyll-feed
+    - jemoji
+#     - jekyll-mentions
+collections:
+    wiki:
+        output: true
+        permalink: /wiki/:path/
+    fragments:
+        output: true
+        permalink: /fragment/:path/
+
+# ---------------- #
+#      Comments    #
+# ---------------- #
+# support provider: disqus, gitment, gitalk, utterances, beaudar, giscus
+comments_provider: giscus
+# !!!Important!!! Please modify the following information to your own application
+# !!!Important!!! Please modify infos below to yours
+# disqus Configuration reference：https://disqus.com
+disqus:
+    username: 
+# gitment Configuration reference：https://imsun.net/posts/gitment-introduction/
+gitment:
+    owner: 
+    repo: 
+    oauth:
+        client_id: 
+        client_secret: 
+# gitalk Configuration reference：https://github.com/gitalk/gitalk#install
+gitalk:
+    owner: 
+    repo: 
+    clientID: 
+    clientSecret: 
+# utterances Configuration reference：https://utteranc.es/
+utterances:
+    repo: 
+# beaudar Configuration reference：https://beaudar.lipk.org/
+beaudar:
+    repo: 
+# giscus Configuration reference：https://giscus.app/zh-CN
+giscus:
+    repo: 
+    repo-id: 
+    category: 
+    category-id: 
+# Clickable to display Disqus when using other comment widgets
+lazy_load_disqus : false
+
+# ---------------- #
+#      Search      #
+# ---------------- #
+simple_jekyll_search:
+    # Whether to support full-text search
+    fulltext: false
+    # How many search results to display at most
+    limit: 10
+
+# ---------------- #
+#      Google      #
+# ---------------- #
+google:
+    analytics_id: # G-20FLEG5Q2W
+    adsense:
+        enabled: false
+        footer: false
+        sidebar: false
+        sidebar-detail: false
+        content_header: false
+        content_footer: false

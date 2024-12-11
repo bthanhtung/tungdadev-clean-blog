@@ -1,0 +1,297 @@
+---
+layout: post
+title: "SOLID Principles"
+date: 2024-08-24 19:29:39 +0700
+categories: [Information Technology, Software]
+tags: [Java]
+---
+
+SOLID, được khái niệm hóa bởi [Robert C. Martin](https://en.wikipedia.org/wiki/Robert_C._Martin) (hay còn gọi là Uncle Bob), là những nguyên tắc thiết kế cơ bản nhằm tạo ra mã nguồn có cấu trúc tốt và dễ bảo trì.
+ 
+Bài viết này sẽ hướng dẫn bạn qua 5 nguyên tắc với các ví dụ minh họa.
+
+Bắt đầu thôiii :)))
+
+### 1. Single Responsibility Principle (SRP)
+
+- "Một class chỉ nên có một lý do để thay đổi."
+- Mỗi class, phương thức hoặc hàm nên phục vụ một mục đích duy nhất và phải rõ ràng, với tất cả các thành phần bên trong phải đảm bảo chỉ hỗ trợ cho mục đích đó.
+- Nếu cần thực hiện một thay đổi, việc thay đổi chỉ nên ảnh hưởng đến nhiệm vụ duy nhất của class đó, và không tác động đến các phần khác không liên quan trong mã nguồn.
+
+```java
+/*
+* Violates SRP
+*/
+public class BankAccount {
+    private double balance;
+
+    public void deposit(double amount) {
+        balance += amount;
+    }
+
+    public void withdraw(double amount) {
+        if (balance >= amount) {
+            balance -= amount;
+        } else {
+            System.out.println("Insufficient funds");
+        }
+    }
+
+    public void printBalance() {
+        System.out.println("Current balance: " + balance);
+    }
+}
+```
+Đoạn mã trên vi phạm nguyên tắc `SRP` bởi vì nếu yêu cầu thay đổi, chẳng hạn như _hiển thị số dư theo một định dạng khác_, thì class `BankAccount` sẽ cần được cập nhật, dẫn đến vi phạm nguyên tắc `SRP`.
+
+Để giải quyết vấn đề này, chúng ta có thể tách thành hai class riêng biệt, đảm bảo rằng mỗi class chỉ có một nhiệm vụ duy nhất.
+
+```java
+/*
+* Follows SRP
+*/
+public class BankAccount {
+    private double balance;
+
+    public void deposit(double amount) {
+        balance += amount;
+    }
+
+    public void withdraw(double amount) {
+        if (balance >= amount) {
+            balance -= amount;
+        } else {
+            throw new IllegalArgumentException("Insufficient funds");
+        }
+    }
+
+    public double getBalance() {
+        return balance;
+    }
+}
+
+public class BalanceDisplayer {
+    public void printBalance(BankAccount account) {
+        System.out.println("Current balance: " + account.getBalance());
+    }
+}
+```
+
+### 2. Open/Closed Principle (OCP)
+
+- "Các thành phần của class nên thiết kế để thoải mái mở rộng nhưng không được chỉnh sửa."
+- Chức năng mới có thể được thêm vào mà không cần thay đổi mã hiện có.
+
+Dựa trên ví dụ trên, giả sử chúng ta muốn _hiển thị số dư dưới một vài định dạng khác nhau_. Để chỉnh sửa class `BalanceDisplayer` mà không vi phạm nguyên tắc `OCP`, chúng ta cần thiết kế mã theo cách mà mọi người có thể tái sử dụng tính năng chỉ bằng cách mở rộng nó.
+```java
+/*
+* Interface for balance display
+*/
+public interface BalanceDisplay {
+    void displayBalance(BankAccount account);
+}
+
+/*
+* Implementation for displaying balance in a simple format
+*/
+public class SimpleBalanceDisplay implements BalanceDisplay {
+    @Override
+    public void displayBalance(BankAccount account) {
+        System.out.println("Current balance: " + account.getBalance());
+    }
+}
+
+/*
+* Implementation for displaying balance in a fancy format
+*/
+public class FancyBalanceDisplay implements BalanceDisplay {
+    @Override
+    public void displayBalance(BankAccount account) {
+        System.out.println("Fancy Balance: $" + account.getBalance() + " ~~~");
+    }
+```
+
+### 3. Liskov Substitution Principle (LSP)
+
+- "Các class dẫn xuất hoặc class con có thể thay thế cho class cơ sở hoặc class cha của chúng."
+- Nếu B là class con của A, thì B nên có thể thay thế A mà không làm ảnh hưởng đến độ chính xác của chương trình.
+
+```java
+/*
+* Subclass SavingsAccount
+*/
+public class SavingsAccount extends BankAccount {
+    public SavingsAccount(double balance) {
+        super(balance);
+    }
+
+    /*
+    * Additional functionality specific to SavingsAccount
+    */
+    public void calculateInterest() {
+        // Calculate interest for savings account
+    }
+}
+
+public class GoldAccount extends BankAccount {
+    private double bonusPoints;
+
+    public GoldAccount(double balance, double bonusPoints) {
+        super(balance);
+        this.bonusPoints = bonusPoints;
+    }
+
+    @Override
+    public void deposit(double amount) {
+        balance += amount + (bonusPoints * 0.1); // Adds bonus points to the deposit
+    }
+}
+```
+Class `SavingsAccount` tuân thủ nguyên tắc `LSP` vì nó mở rộng chức năng bằng cách thêm các phương thức cụ thể như `calculateInterest`, mà không làm thay đổi hành vi cốt lõi của việc gửi và rút tiền.
+
+Class `GoldAccount` vi phạm nguyên tắc `LSP` vì nó thay đổi hành vi của phương thức `deposit` từ class cơ sở `BankAccount`.
+
+### 4. Interface Segregation Principle (ISP)
+
+- "Không ép buộc bất kỳ client nào phải triển khai một interface không liên quan đến chúng."
+- Các client không nên bị bắt buộc phải triển khai các interface chứa các phương thức mà họ không sử dụng.
+- Thay vì có một interface lớn duy nhất, tốt hơn hết là có nhiều interface nhỏ hơn, mỗi interface tập trung vào một tập hợp phương thức cụ thể liên quan đến một chức năng nhất định.
+
+```java
+/*
+* Violation of ISP
+*/
+public interface IBankAccount {
+    void deposit(double amount);
+    void withdraw(double amount);
+    double getBalance();
+    void printStatement();
+    void requestLoan();
+}
+
+public class BankAccount implements IBankAccount {
+    private double balance;
+
+    public void deposit(double amount) {
+        // implementation details
+    }
+
+    public void withdraw(double amount) {
+        // implementation details
+    }
+
+    public double getBalance() {
+        // implementation details
+    }
+
+    public void printStatement() {
+        // implementation details
+    }
+
+    public void requestLoan() {
+        // implementation details
+    }
+}
+```
+
+Interface `IBankAccount` vi phạm nguyên tắc `ISP` vì bao gồm các phương thức không liên quan đến tất cả các lớp triển khai nó.
+
+Interface `BankAccount` triển khai toàn bộ `IBankAccount` interface, mặc dù có thể không cần phương thức `requestLoan`.
+```java
+/*
+* Adheres to ISP
+* Interface for account management
+*/
+public interface AccountManager {
+    void deposit(double amount);
+    void withdraw(double amount);
+    double getBalance();
+}
+
+/*
+* Interface for account reporting
+*/
+public interface AccountReporter {
+    void printStatement();
+}
+
+/*
+* Interface for loan management
+*/
+public interface LoanManager {
+    void requestLoan();
+}
+```
+
+Mỗi class bây giờ chỉ phụ thuộc vào các interface liên quan đến trách nhiệm của nó, tuân thủ nguyên tắc ISP.
+
+### 5. Dependency Inversion Principle (DIP)
+
+- "Các mô-đun cấp cao không nên phụ thuộc vào các mô-đun cấp thấp. Cả hai nên phụ thuộc vào các trừu tượng."
+- "Trừu tượng không nên phụ thuộc vào chi tiết. Chi tiết nên phụ thuộc vào trừu tượng."
+
+Hãy tưởng tượng như một nhà hàng. Mô-đun cấp cao là nhà hàng, và mô-đun cấp thấp là nhà bếp. Nhà hàng không nên phụ thuộc trực tiếp vào nhà bếp. Thay vào đó, cả hai nên phụ thuộc vào một ngôn ngữ chung, ví dụ như tiếng Anh. Nhà bếp không nên phụ thuộc vào thực đơn cụ thể của nhà hàng. Thay vào đó, thực đơn nên phụ thuộc vào kỹ năng nấu ăn của nhà bếp.
+```java
+/*
+* Violates DIP
+*/
+public class ShoppingMall {
+    private BankAccount bankAccount;
+
+    public ShoppingMall(BankAccount bankAccount) {
+        this.bankAccount = bankAccount;
+    }
+
+    public void doPayment(String order, double amount) {
+        bankAccount.withdraw(amount);
+        // Process the payment
+    }
+}
+```
+Trong ví dụ này, class `ShoppingMall` phụ thuộc trực tiếp vào class `BankAccount`, do đó vi phạm nguyên tắc `DIP`. Class `ShoppingMall` là mô-đun cấp cao, và class `BankAccount` là mô-đun cấp thấp.
+
+Để khắc phục điều này, chúng ta có thể giới thiệu một trừu tượng mà cả hai class `ShoppingMall` và `BankAccount` đều có thể phụ thuộc vào.
+
+```java
+/*
+* Adhering to DIP
+*/
+public interface PaymentProcessor {
+    void processPayment(double amount);
+    double getBalance();
+}
+
+
+public class BankAccount implements PaymentProcessor {
+    // implementation details
+}
+
+public class ShoppingMall {
+    private PaymentProcessor paymentProcessor;
+
+    public ShoppingMall(PaymentProcessor paymentProcessor) {
+        this.paymentProcessor = paymentProcessor;
+    }
+
+    public void doPayment(String order, double amount) {
+        paymentProcessor.processPayment(amount);
+        // Process the payment
+    }
+}
+```
+
+### Lời kết
+`SOLID` là 5 nguyên tắc cơ bản trong việc thiết kế phần mềm. Nó giúp chúng ta tổ chức sắp xếp các `function, method, class` một cách tường minh và chính xác hơn.
+
+`SOLID` giúp tạo ra các module, class rõ ràng, mạch lạc, mang tính độc lập cao. Do vậy khi có sự yêu cầu thay đổi và mở rộng ta cũng không tốn quá nhiều công sức để thực hiện.
+
+`SOLID` khiến các lập trình viên suy nghĩ nhiều hơn về cách viết phần mềm, do vậy code viết ra sẽ mạch lạc, dễ hiểu, dễ sử dụng.
+
+
+> P/S: Nếu bạn thấy bài viết này hữu ích, đừng quên chia sẻ với bạn bè và đồng nghiệp của mình nhé!
+
+Happy reading! 😎 👍🏻 🚀 🔥
+
+**Reference**:
+- [**What are the SOLID Principles in Java?**](https://www.freecodecamp.org/news/introduction-to-solid-principles/)
+- [**SOLID Principles Explained**](https://dev.to/rachelsarchive/solid-principles-explained-with-examples-in-java-3d2g)

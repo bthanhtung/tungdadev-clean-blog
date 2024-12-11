@@ -1,0 +1,15 @@
+- name: Blog
+  url: https://tungbt-blog.netlify.app
+  src: life
+
+- name: Quotes Random
+  url: https://tungbt-quote.netlify.app
+  src: life
+
+- name: Tet Countdown
+  url: https://tungbt-count-down.netlify.app/
+  src: life
+
+- name: Merry Christmas
+  url: https://tungdadev-merry-christmas.netlify.app
+  src: life
