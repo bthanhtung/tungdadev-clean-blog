@@ -2,16 +2,16 @@
 #   Main Configs   #
 # ---------------- #
 baseurl:
-url: https://cristorvalds.org
+url: https://cristorvalds.netlify.app/
 date_format: "ordinal"
-title: CrisDaDev
-subtitle: "SOFTWARE ENGINEER"
-description: "CRISDADEV"
+title: CrisTorvalds
+subtitle: "CRIS TORVALDS"
+description: "CRIS-TORVALDS"
 keywords: Cris Torvalds
 timezone: Asia/Ho_Chi_Minh
 encoding: "utf-8"
 # The year displayed in the lower left corner of the page
-since: 2015
+since: 2020
 # Source code repository, please replace it with your own
 repository: 
 # CDN acceleration configuration for css and js resources
@@ -28,7 +28,7 @@ components:
     # Busuanzi visit statistics
     busuanzi:
         enabled: false
-        start_date: 2020-05-03
+        start_date: 2020-04-19
     # My Popular Repositories
     side_bar_repo:
         enabled: true
