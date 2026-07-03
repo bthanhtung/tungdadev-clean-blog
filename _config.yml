@@ -11,7 +11,7 @@ keywords: Cris Torvalds
 timezone: Asia/Ho_Chi_Minh
 encoding: "utf-8"
 # The year displayed in the lower left corner of the page
-since: 2020
+since: 2022
 # Source code repository, please replace it with your own
 repository: bthanhtung/tungdadev-clean-blog
 # CDN acceleration configuration for css and js resources
