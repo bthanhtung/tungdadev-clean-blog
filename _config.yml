@@ -13,7 +13,7 @@ encoding: "utf-8"
 # The year displayed in the lower left corner of the page
 since: 2020
 # Source code repository, please replace it with your own
-repository: tungdadev/tungdadev-clean-blog
+repository: bthanhtung/tungdadev-clean-blog
 # CDN acceleration configuration for css and js resources
 cdn:
     jsdelivr:
@@ -171,7 +171,7 @@ beaudar:
     repo: 
 # giscus Configuration reference：https://giscus.app/zh-CN
 giscus:
-    repo: tungdadev/tungdadev-clean-blog # Hoặc thay bằng tên repo thực tế của bạn
+    repo: bthanhtung/tungdadev-clean-blog # Hoặc thay bằng tên repo thực tế của bạn
     repo-id: R_kgDONb4AkQ # Lấy từ giscus.app
     category: General
     category-id: DIC_kwDONb4Akc4DAZsV # Lấy từ giscus.app
