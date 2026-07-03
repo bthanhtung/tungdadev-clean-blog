@@ -21,7 +21,7 @@ Strategy Pattern bao gồm 3 thành phần chính:
 - Strategy (interface): Định nghĩa một giao diện chung cho các thuật toán.
 - Concrete Strategy: Hiện thực cụ thể của Strategy.
 
-![strategy-uml](/assets/img/blog/strategy-uml.png)
+![strategy-uml]({{ site.baseurl }}/assets/img/blog/strategy-uml.png)
 
 Sơ đồ UML:
 

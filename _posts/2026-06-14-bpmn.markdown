@@ -28,7 +28,7 @@ Hãy tưởng tượng bạn vẽ flowchart cho quy trình duyệt khoản vay. 
 
 BPMN 2.0 chia thành 5 nhóm elements chính
 
-![bpmn-elements](/assets/img/blog/bpmn/bpmn-elements.png)
+![bpmn-elements]({{ site.baseurl }}/assets/img/blog/bpmn-elements.png)
 
 Bạn không cần thuộc lòng tất cả — 80% process dùng lặp đi lặp lại khoảng 10-15 elements. Phần tiếp theo đi sâu vào từng nhóm với ví dụ thực tế.
 

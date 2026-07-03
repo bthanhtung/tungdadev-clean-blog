@@ -16,7 +16,7 @@ Kafka Connect là framework để stream data giữa Kafka và external systems 
 
 #### # kiến trúc kafka connect
 
-![kafka-architecture](/assets/img/blog/kafka/kafka-architecture.png)
+![kafka-architecture]({{ site.baseurl }}/assets/img/blog/kafka-architecture.png)
 
 #### # hai loại connector
 
@@ -134,7 +134,7 @@ Khi bạn có 50 services đọc/ghi cùng một topic, bạn CẦN một nơi q
 
 #### # schema registry hoạt động thế nào?
 
-![kafka-schema-registry](/assets/img/blog/kafka/kafka-schema-registry.png)
+![kafka-schema-registry]({{ site.baseurl }}/assets/img/blog/kafka-schema-registry.png)
 
 #### # compatibility modes
 
@@ -500,7 +500,7 @@ kafka-acls --bootstrap-server kafka:9093 \
 
 #### # encryption in transit — SSL/TLS
 
-![kafka-encryption](/assets/img/blog/kafka/kafka-encryption.png)
+![kafka-encryption]({{ site.baseurl }}/assets/img/blog/kafka-encryption.png)
 
 #### # encryption at rest
 
@@ -988,7 +988,7 @@ Debezium là open-source CDC platform chạy trên Kafka Connect. Nó capture m�
 
 #### # tại sao CDC?
 
-![kafka-cdc](/assets/img/blog/kafka/kafka-cdc.png)
+![kafka-cdc]({{ site.baseurl }}/assets/img/blog/kafka-cdc.png)
 
 #### # debezium MySQL connector
 
@@ -1334,7 +1334,7 @@ kafka-reassign-partitions --bootstrap-server localhost:9092 \
 
 #### # monitoring dashboard — metrics quan trọng nhất
 
-![kafka-monitoring-dashboard](/assets/img/blog/kafka/kafka-monitoring-dashboard.png)
+![kafka-monitoring-dashboard]({{ site.baseurl }}/assets/img/blog/kafka-monitoring-dashboard.png)
 
 #### # prometheus + grafana setup
 
@@ -1742,7 +1742,7 @@ public class OrderRequestHandler {
 
 Từ Kafka 3.3+, KRaft mode cho phép chạy Kafka mà không cần Zookeeper. Kafka 4.0 sẽ loại bỏ Zookeeper hoàn toàn.
 
-![kafka-kraft](/assets/img/blog/kafka/kafka-kraft.png)
+![kafka-kraft]({{ site.baseurl }}/assets/img/blog/kafka-kraft.png)
 
 ```yaml
 # docker-compose KRaft mode

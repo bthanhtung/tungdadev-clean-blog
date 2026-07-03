@@ -36,7 +36,7 @@ Redis không chỉ là key-value đơn giản. Nó hỗ trợ nhiều cấu trú
 
 ### # cách xử lý request
 
-![request-redis](/assets/img/blog/redis/request-redis.png)
+![request-redis]({{ site.baseurl }}/assets/img/blog/request-redis.png)
 
 Single-threaded nghĩa là mỗi command được xử lý tuần tự, atomic by default. Không có 2 command nào chạy đồng thời trên cùng data.
 

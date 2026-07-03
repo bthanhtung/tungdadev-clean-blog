@@ -29,7 +29,7 @@ Với việc xử lý các tác vụ liên tục như vậy, có một giải ph
 
 Vấn đề là giả sử có hơn 31 request tới cùng lúc thì sao? rất đúng, trường hợp này là chắc chắn có. Lúc này `Pool` sẽ không còn thread nào sẵn có nữa. Nên 1 request còn lại sẽ bị đẩy vào 1 hàng đợi `BlockingQueue`. Nó sẽ đợi ở đó, bao giờ `Pool` có 1 thread rảnh rỗi thì sẽ quay lại xử lý nốt =))) Chịu thôi, cứ ví dụ vậy hah.
 
-![thread-pool](/assets/img/blog/loda1554800053212/3.png)
+![thread-pool]({{ site.baseurl }}/assets/img/blog/3.png)
 
 Đó là concept của `ThreadPool` đó các bạn.
 

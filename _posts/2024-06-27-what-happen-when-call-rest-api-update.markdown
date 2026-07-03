@@ -453,7 +453,7 @@ WHERE id = '550e8400-e29b-41d4-a716-446655440000'
 
 Khi PostgreSQL server nhận UPDATE statement
 
-![query-processing-pipeline](/assets/img/blog/query-processing-pipeline.png)
+![query-processing-pipeline]({{ site.baseurl }}/assets/img/blog/query-processing-pipeline.png)
 
 Cho UPDATE cụ thể:
 
@@ -466,7 +466,7 @@ Cho UPDATE cụ thể:
 
 PostgreSQL KHÔNG overwrite data cũ. Nó tạo **version mới** của row:
 
-![postgresql-mvcc](/assets/img/blog/postgresql-mvcc.png)
+![postgresql-mvcc]({{ site.baseurl }}/assets/img/blog/postgresql-mvcc.png)
 
 UPDATE tạo:
 

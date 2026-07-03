@@ -19,7 +19,7 @@ Mọi HTTP request trước khi chạm đến cánh cửa của Controller đề
 
 ### # dòng chảy của một request
 
-![spring-req-flow](/assets/img/blog/spring/spring-req-flow.png)
+![spring-req-flow]({{ site.baseurl }}/assets/img/blog/spring-req-flow.png)
 
 Dưới đây là sơ đồ luồng đi tường minh của một request qua các tầng bảo mật:
 

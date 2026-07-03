@@ -357,7 +357,7 @@ Khi cần mô phỏng hàng nghìn users, 1 máy JMeter không đủ resource. D
 
 #### # kiến trúc
 
-![distributed-testing](/assets/img/blog/distributed-testing.png)
+![distributed-testing]({{ site.baseurl }}/assets/img/blog/distributed-testing.png)
 
 #### # cấu hình
 

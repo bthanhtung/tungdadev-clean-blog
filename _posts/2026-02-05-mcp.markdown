@@ -16,7 +16,7 @@ Analogy: HTTP chuẩn hóa cách web browsers nói chuyện với web servers. M
 
 #### # trước mcp (n×m problem):
 
-![mcp-problem](/assets/img/blog/mcp/mcp-problem.png)
+![mcp-problem]({{ site.baseurl }}/assets/img/blog/mcp-problem.png)
 
 ```
 Claude ──── Custom code ──── Jira
@@ -31,7 +31,7 @@ N models × M tools = N×M integrations
 
 #### # sau mcp (n+m solution):
 
-![mcp-solution](/assets/img/blog/mcp/mcp-solution.png)
+![mcp-solution]({{ site.baseurl }}/assets/img/blog/mcp-solution.png)
 
 Điểm mấu chốt của kiến trúc:
 
@@ -44,7 +44,7 @@ N models × M tools = N×M integrations
 
 MCP follows client-server architecture. AI application là **MCP Client**, external systems expose functionality qua **MCP Server**.
 
-![mcp-architecture](/assets/img/blog/mcp/mcp-architecture.png)
+![mcp-architecture]({{ site.baseurl }}/assets/img/blog/mcp-architecture.png)
 
 #### # primitives của mcp:
 

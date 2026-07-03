@@ -18,7 +18,7 @@ Hơn thế nữa, nó được thiết kế "from the ground up" cho khả năng
 
 ### # system architecture
 
-![mongo-architecture](/assets/img/blog/mongo/mongo-architecture.png)
+![mongo-architecture]({{ site.baseurl }}/assets/img/blog/mongo-architecture.png)
 
 Replica Set: Đảm bảo dữ liệu không bao giờ bị mất. Cơ chế bầu chọn (Election) tự động kích hoạt khi node Primary sập, một node Secondary sẽ được thăng cấp để duy trì hệ thống.
 
@@ -193,7 +193,7 @@ db.orders.aggregate([
 
 ### # replica set
 
-![mongo-replica](/assets/img/blog/mongo/mongo-replica.png)
+![mongo-replica]({{ site.baseurl }}/assets/img/blog/mongo-replica.png)
 
 Election: nếu Primary chết → Secondaries vote → new Primary elected
 

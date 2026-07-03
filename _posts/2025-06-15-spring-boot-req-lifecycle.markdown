@@ -22,7 +22,7 @@ lặn sâu xuống Database và cuối cùng ngược dòng mang theo Response t
 
 Một request đi qua hệ thống không phải là một đường thẳng, mà là một vòng cung chữ U xuyên qua các lớp lang kiến trúc,
 tuân thủ chặt chẽ nguyên tắc `Separation of Concerns`.
-![springboot-req-flow](/assets/img/blog/spring-boot/springboot-req-flow.png)
+![springboot-req-flow]({{ site.baseurl }}/assets/img/blog/springboot-req-flow.png)
 
 Hãy cùng bóc tách từng lớp (layer) để xem các kỹ sư của Spring đã thiết kế hệ thống rành mạch như thế nào.
 

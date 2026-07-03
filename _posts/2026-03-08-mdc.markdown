@@ -302,7 +302,7 @@ Framework sẽ âm thầm lo liệu mọi thứ:
 
 Ghi log dưới dạng text thuần túy là cách làm của thập kỷ trước. Với hàng gigabytes log mỗi ngày, text parsing tốn kém một cách vô ích. Việc chuyển đổi sang JSON Format (Structured Logging) giúp các hệ thống như ELK Stack (Elasticsearch, Logstash, Kibana) hay Grafana Loki index dữ liệu với tốc độ ánh sáng.
 
-![tracing-concepts](/assets/img/blog/mdc/tracing-concepts.png)
+![tracing-concepts]({{ site.baseurl }}/assets/img/blog/tracing-concepts.png)
 
 `traceId="abc-123"` là cố định cho toàn bộ `trace`; `spanId` là duy nhất cho mỗi `span`; và `parentSpanId` là `ID` của `span cha` đã gọi nó.
 

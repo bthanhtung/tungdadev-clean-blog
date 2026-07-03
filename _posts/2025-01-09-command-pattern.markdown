@@ -22,7 +22,7 @@ Command Pattern bao gồm các thành phần chính:
 - Invoker (Người gọi lệnh): Lưu trữ lệnh và gọi phương thức execute() để thực thi lệnh.
 - Client: Tạo đối tượng lệnh và gán lệnh cho Invoker.
 
-![command-uml](/assets/img/blog/command-uml.png)
+![command-uml]({{ site.baseurl }}/assets/img/blog/command-uml.png)
 
 Sơ đồ UML:
 

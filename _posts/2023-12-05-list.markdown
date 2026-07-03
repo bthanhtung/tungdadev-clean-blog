@@ -21,7 +21,7 @@ Bài viết này sẽ "phẫu thuật" toàn diện `List Interface` trong Java,
 và hỗ trợ truy xuất ngẫu nhiên (random access) thông qua index.
 
 Hệ sinh thái của `List` có thể được hình dung như sau:
-![list-hierarchy](/assets/img/blog/list/list-hierarchy.png)
+![list-hierarchy]({{ site.baseurl }}/assets/img/blog/list-hierarchy.png)
 
 _**Lưu ý**_: Từ Java 21, sự xuất hiện của `SequencedCollection` đã mang lại các phương thức đồng nhất như `getFirst()`, `getLast()`
 cho toàn bộ các `collection` có thứ tự, làm cho việc thao tác với `List` càng trở nên liền mạch hơn.
@@ -89,7 +89,7 @@ Nhiều tài liệu cũ khuyên dùng `LinkedList` khi cần `chèn/xóa` nhiề
 
 `LinkedList` trong Java là một danh sách liên kết kép `(Doubly-linked list)`. Mỗi phần tử là một Node độc lập chứa tham chiếu đến Node trước và Node sau.
 
-![list-structure](/assets/img/blog/list/list-structure.png)
+![list-structure]({{ site.baseurl }}/assets/img/blog/list-structure.png)
 
 Cú pháp Java:
 

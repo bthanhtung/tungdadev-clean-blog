@@ -25,7 +25,7 @@ Trước khi đi sâu vào chi tiết, chúng ta cần thống nhất một góc
 
 Cây gia phả (và những đứa con bị chối bỏ):
 
-![family-tree](/assets/img/blog/stack-queue/family-tree.png)
+![family-tree]({{ site.baseurl }}/assets/img/blog/family-tree.png)
 
 ### # stack
 
@@ -188,7 +188,7 @@ deque.pollLast();     // "B"
 Dưới đây là hình ảnh minh họa chi tiết quá trình hoạt động của hai phép toán `addFirst` (thêm vào đầu)
 và `addLast` (thêm vào cuối) trên mảng vòng đã cung cấp.
 
-![array-deque](/assets/img/blog/stack-queue/array-deque.png)
+![array-deque]({{ site.baseurl }}/assets/img/blog/array-deque.png)
 
 Hình ảnh được chia làm hai phần:
 

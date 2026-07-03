@@ -46,7 +46,7 @@ Hầu hết tools hiện tại (GitHub Copilot, Cursor, Kiro) hoạt động ở
 
 Mọi agent đều có 4 thành phần
 
-![ai-component](/assets/img/blog/ai/ai-component.png)
+![ai-component]({{ site.baseurl }}/assets/img/blog/ai-component.png)
 
 #### # brain (llm)
 
@@ -84,7 +84,7 @@ Tools = MCP servers + built-in capabilities.
 
 Pattern phổ biến nhất: **ReAct** (Reasoning + Acting). Agent alternates giữa thinking (reasoning about what to do) và acting (executing a tool).
 
-![agent-loop](/assets/img/blog/ai/agent-loop.png)
+![agent-loop]({{ site.baseurl }}/assets/img/blog/agent-loop.png)
 
 Phân tích cơ chế ReAct qua ví dụ:
 Tự quản lý Trạng thái (State Management): Qua mỗi Iteration, phần OBSERVATION từ môi trường (Codebase, Compiler)
@@ -174,7 +174,7 @@ Main Agent: "Build user registration feature"
 
 Thay vì 1 super-agent làm mọi thứ, chia thành nhiều specialized agents collaborate:
 
-![multi-agent](/assets/img/blog/ai/multi-agent.png)
+![multi-agent]({{ site.baseurl }}/assets/img/blog/multi-agent.png)
 
 Orchestrator Agent (Gốc): Đóng vai trò là "Manager" (Quản lý). Nó nhận yêu cầu lớn từ User, bẻ nhỏ bài toán (Task Decomposition),
 giao việc cho các Agent chuyên môn và là người cuối cùng duyệt nghiệm thu kết quả trước khi trả về cho khách hàng.

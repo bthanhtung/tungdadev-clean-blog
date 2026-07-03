@@ -25,7 +25,7 @@ Tại sao developer cần hiểu T24?
 T24 sinh ra từ thập niên 90 — kiến trúc khác xa `modern microservices`. Hiểu context lịch sử giúp bạn không "judge" nó bằng
 `modern standards` mà biết cách work with it.
 
-![t24-architecture](/assets/img/blog/t24/t24-architecture.png)
+![t24-architecture]({{ site.baseurl }}/assets/img/blog/t24-architecture.png)
 
 #### # đặc điểm kiến trúc
 
@@ -56,7 +56,7 @@ T24 tổ chức data theo "Applications" (tương đương bảng/collection):
 
 #### # record id pattern
 
-![record-pattern](/assets/img/blog/t24/record-pattern.png)
+![record-pattern]({{ site.baseurl }}/assets/img/blog/record-pattern.png)
 
 Mỗi `record` có `ID` unique, thường encode metadata:
 
@@ -231,7 +231,7 @@ Balances in T24:
 
 #### # transaction flow
 
-![transaction-flow](/assets/img/blog/t24/transaction-flow.png)
+![transaction-flow]({{ site.baseurl }}/assets/img/blog/transaction-flow.png)
 
 - STMT.ENTRY (Statement Entry): Đây là các bản ghi hạch toán chi tiết. Khi ACCOUNT bị thay đổi số dư, T24 sẽ tự động sinh ra
   các STMT.ENTRY tương ứng để phục vụ cho việc in sao kê và đối soát (Reconciliation) sau này.

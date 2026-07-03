@@ -18,7 +18,7 @@ biến những hộp đen (black box) thành những thực thể minh bạch, d
 
 Observability không phải là một công cụ mà là một thuộc tính của hệ thống. Thuộc tính này được xây dựng trên ba trụ cột chính, bổ trợ chặt chẽ cho nhau:
 
-![observability-structure](/assets/img/blog/observability/observability-structure.png)
+![observability-structure]({{ site.baseurl }}/assets/img/blog/observability-structure.png)
 
 Quy trình gỡ lỗi tiêu chuẩn: Cảnh báo từ Metrics → Dùng Traces để khoanh vùng service/hàm gặp vấn đề → Đọc Logs tại điểm đó để tìm nguyên nhân gốc rễ (Root Cause).
 
@@ -352,7 +352,7 @@ public class ImportService {
 
 #### # trace propagation across services
 
-![observability-trace-propagation](/assets/img/blog/observability/observability-trace-propagation.png)
+![observability-trace-propagation]({{ site.baseurl }}/assets/img/blog/observability-trace-propagation.png)
 
 ```java
 // HTTP client — auto-propagated via WebClient/RestClient instrumentation
@@ -448,13 +448,13 @@ Có `Metrics` tốt mà `Alert` tồi (báo động giả liên tục) sẽ dẫ
 
 #### # essential dashboard panels
 
-![observability-essential-dashboard](/assets/img/blog/observability/observability-essential-dashboard.png)
+![observability-essential-dashboard]({{ site.baseurl }}/assets/img/blog/observability-essential-dashboard.png)
 
 ### # production debugging
 
 #### # troubleshooting workflow
 
-![observability-troubleshooting-workflow](/assets/img/blog/observability/observability-troubleshooting-workflow.png)
+![observability-troubleshooting-workflow]({{ site.baseurl }}/assets/img/blog/observability-troubleshooting-workflow.png)
 
 #### # dynamic log level (runtime change)
 

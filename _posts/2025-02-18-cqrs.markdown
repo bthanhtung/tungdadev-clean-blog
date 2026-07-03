@@ -38,7 +38,7 @@ Trước khi đưa một framework đồ sộ vào hệ thống, việc áp dụ
 
 Mô hình này cô lập logic thay đổi trạng thái (Command) và logic truy vấn dữ liệu (Query).
 
-![cqrs-structure](/assets/img/blog/cqrs/cqrs-structure.png)
+![cqrs-structure]({{ site.baseurl }}/assets/img/blog/cqrs-structure.png)
 
 #### # triển khai thực tế cho ticketing service
 

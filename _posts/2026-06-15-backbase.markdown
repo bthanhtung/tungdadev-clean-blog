@@ -22,7 +22,7 @@ Tương tự, ngân hàng không build digital banking platform từ scratch, d�
 
 Backbase theo mô hình **MACH Architecture** (Microservices, API-first, Cloud-native, Headless)
 
-![backbase-arch](/assets/img/blog/backbase/backbase-arch.png)
+![backbase-arch]({{ site.baseurl }}/assets/img/blog/backbase-arch.png)
 
 ### # core concepts
 

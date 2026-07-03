@@ -24,7 +24,7 @@ Dễ dàng Debug: Bạn chỉ cần mở trình duyệt và truy cập /metrics 
 
 Prometheus tuân theo một luồng xử lý cực kỳ mạch lạc và phân tách trách nhiệm rõ ràng:
 
-![promethus-structure](/assets/img/blog/promethus/promethus-structure.png)
+![promethus-structure]({{ site.baseurl }}/assets/img/blog/promethus-structure.png)
 
 Kiến trúc này mô tả luồng hoạt động cốt lõi của máy chủ Prometheus, được chia thành các thành phần chính sau:
 

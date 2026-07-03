@@ -25,7 +25,7 @@ Cái "kệ order" đó chính là message queue.
 
 #### # vấn đề thực tế mà Message Queue giải quyết
 
-![rest-block](/assets/img/blog/rabbitmq/rest-block.png)
+![rest-block]({{ site.baseurl }}/assets/img/blog/rest-block.png)
 
 Vấn đề:
 
@@ -36,7 +36,7 @@ Vấn đề:
 
 Với message queue:
 
-![message-queue](/assets/img/blog/rabbitmq/message-queue.png)
+![message-queue]({{ site.baseurl }}/assets/img/blog/message-queue.png)
 
 Lợi ích:
 
@@ -88,7 +88,7 @@ Nếu nắm chắc phần này, các vấn đề cấu hình hay debug sau này 
 
 #### # các thành phần cốt lõi
 
-![core-pattern](/assets/img/blog/rabbitmq/core-pattern.png)
+![core-pattern]({{ site.baseurl }}/assets/img/blog/core-pattern.png)
 
 #### # các thành phần
 
@@ -123,7 +123,7 @@ Nơi lưu trữ message cho đến khi có Consumer lấy đi xử lý. Một Qu
 
 #### # connection & channel
 
-![connection-channel](/assets/img/blog/rabbitmq/connection-channel.png)
+![connection-channel]({{ site.baseurl }}/assets/img/blog/connection-channel.png)
 
 **Connection**: Là một kết nối vật lý (TCP connection) từ ứng dụng tới RabbitMQ broker. Việc mở mới một Connection rất tốn tài nguyên (phải thực hiện bắt tay TCP, xác thực, bắt tay bảo mật TLS...). Do đó, ta nên giữ kết nối này bền vững thay vì tạo mới liên tục.
 
@@ -154,7 +154,7 @@ AMQP (Advanced Message Queuing Protocol) là giao thức truyền tin ở tầng
 
 #### # vòng đời của một message
 
-![message-lifecycle](/assets/img/blog/rabbitmq/message-lifecycle.png)
+![message-lifecycle]({{ site.baseurl }}/assets/img/blog/message-lifecycle.png)
 
 #### # message properties (thuộc tính tin nhắn)
 
@@ -210,7 +210,7 @@ channel.basicReject(deliveryTag, false);      // Thất bại, loại bỏ tin n
 
 Định tuyến chính xác dựa theo Routing Key. Message chỉ được chuyển đến Queue có Binding Key khớp hoàn toàn (exact match) với Routing Key của tin nhắn.
 
-![direct-exchange](/assets/img/blog/rabbitmq/direct-exchange.png)
+![direct-exchange]({{ site.baseurl }}/assets/img/blog/direct-exchange.png)
 
 **Use case**: Phân phối tác vụ (task distribution), điều hướng tin nhắn đến đúng các service chuyên biệt.
 
@@ -228,7 +228,7 @@ channel.basicPublish("order.direct", "order.created", null, message.getBytes());
 
 Cơ chế Broadcast — gửi message tới **tất cả** các Queue đang liên kết với nó mà không cần quan tâm đến Routing Key.
 
-![fanout-exchange](/assets/img/blog/rabbitmq/fanout-exchange.png)
+![fanout-exchange]({{ site.baseurl }}/assets/img/blog/fanout-exchange.png)
 
 **Use case**: Phát tán sự kiện (event broadcasting), gửi các thông báo cho nhiều service chạy bất đồng bộ cùng lúc.
 
@@ -248,7 +248,7 @@ channel.basicPublish("notification.fanout", "", null, message.getBytes());
 - Ký tự `*` (star): Thay thế cho đúng 1 từ.
 - Ký tự `#` (hash): Thay thế cho 0 hoặc nhiều từ.
 
-![topic-exchange](/assets/img/blog/rabbitmq/topic-exchange.png)
+![topic-exchange]({{ site.baseurl }}/assets/img/blog/topic-exchange.png)
 
 **Use case**: Định tuyến tin nhắn linh hoạt dựa trên nhiều tiêu chí lọc nâng cao.
 
@@ -1114,7 +1114,7 @@ public class IdempotentOrderConsumer {
 
 #### # tổng hợp reliability flow
 
-![reliability-flow](/assets/img/blog/rabbitmq/reliability-flow.png)
+![reliability-flow]({{ site.baseurl }}/assets/img/blog/reliability-flow.png)
 
 ### # dead letter exchange — xử lý message thất bại
 
@@ -1430,7 +1430,7 @@ Infrastructure:
 
 #### # khác biệt về mặt kiến trúc
 
-![rabbitmq-diff-kafka](/assets/img/blog/rabbitmq/rabbitmq-diff-kafka.png)
+![rabbitmq-diff-kafka]({{ site.baseurl }}/assets/img/blog/rabbitmq-diff-kafka.png)
 
 #### # so sánh chi tiết các tiêu chí
 
@@ -1477,7 +1477,7 @@ Infrastructure:
 
 Absolutely. Trong nhiều hệ thống lớn:
 
-![rabbitmq-with-kafka](/assets/img/blog/rabbitmq/rabbitmq-with-kafka.png)
+![rabbitmq-with-kafka]({{ site.baseurl }}/assets/img/blog/rabbitmq-with-kafka.png)
 
 ### # production readiness checklist
 

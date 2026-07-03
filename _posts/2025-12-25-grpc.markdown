@@ -26,7 +26,7 @@ Năm 2015, Google quyết định xây dựng lại Stubby từ đầu, dựa tr
 
 Nói đơn giản: gRPC cho phép bạn **gọi một function trên server khác như thể nó nằm ngay trong code của bạn**.
 
-![grpc-call](/assets/img/blog/grpc/grpc-call.png)
+![grpc-call]({{ site.baseurl }}/assets/img/blog/grpc-call.png)
 
 Bạn gọi `orderService.getOrder(orderId)` ở client Java và nó thực sự chạy logic trên server Python. Client không cần biết server viết bằng gì — gRPC lo hết.
 
@@ -50,7 +50,7 @@ Bạn gọi `orderService.getOrder(orderId)` ở client Java và nó thực sự
 
 Hãy trace một gRPC call từ đầu đến cuối:
 
-![grpc-flow](/assets/img/blog/grpc/grpc-flow.png)
+![grpc-flow]({{ site.baseurl }}/assets/img/blog/grpc-flow.png)
 
 #### # bước 1: định nghĩa contract (.proto)
 
@@ -130,7 +130,7 @@ Khi client gọi `getOrder()`:
 
 HTTP/1.1 có vấn đề **head-of-line blocking** — mỗi connection chỉ xử lý 1 request tại một thời điểm. HTTP/2 giải quyết điều này:
 
-![grpc-http2](/assets/img/blog/grpc/grpc-http2.png)
+![grpc-http2]({{ site.baseurl }}/assets/img/blog/grpc-http2.png)
 
 - **Multiplexing**: Nhiều request/response song song trên 1 connection
 - **Header compression** (HPACK): Giảm overhead cho repeated headers
@@ -257,7 +257,7 @@ Giống REST truyền thống — 1 request, 1 response.
 rpc GetOrder (GetOrderRequest) returns (OrderResponse);
 ```
 
-![protobuf-client-server](/assets/img/blog/grpc/protobuf-client-server.png)
+![protobuf-client-server]({{ site.baseurl }}/assets/img/blog/protobuf-client-server.png)
 
 **Use case**: CRUD operations, authentication, simple queries.
 
@@ -269,7 +269,7 @@ Client gửi 1 request, server trả về một stream of responses.
 rpc ListOrders (ListOrdersRequest) returns (stream OrderResponse);
 ```
 
-![protobuf-client-server-stream](/assets/img/blog/grpc/protobuf-client-server-stream.png)
+![protobuf-client-server-stream]({{ site.baseurl }}/assets/img/blog/protobuf-client-server-stream.png)
 
 **Use case**: Real-time feeds, downloading large datasets, live notifications.
 
@@ -281,7 +281,7 @@ Client gửi một stream of requests, server trả về 1 response khi stream k
 rpc UploadOrderItems (stream OrderItem) returns (UploadSummary);
 ```
 
-![protobuf-rpc](/assets/img/blog/grpc/protobuf-rpc.png)
+![protobuf-rpc]({{ site.baseurl }}/assets/img/blog/protobuf-rpc.png)
 
 **Use case**: File upload, batch processing, IoT sensor data collection.
 
@@ -293,7 +293,7 @@ Cả client và server đều gửi stream — hoàn toàn độc lập với nh
 rpc OrderChat (stream ChatMessage) returns (stream ChatMessage);
 ```
 
-![protobuf-rpc-msg](/assets/img/blog/grpc/protobuf-rpc-msg.png)
+![protobuf-rpc-msg]({{ site.baseurl }}/assets/img/blog/protobuf-rpc-msg.png)
 
 **Use case**: Chat, real-time collaboration, gaming, live dashboards.
 
@@ -1407,7 +1407,7 @@ public void listOrders(ListOrdersRequest request,
 
 Trong production, gRPC thường chạy cùng service mesh (Istio, Linkerd):
 
-![grpc-microservice](/assets/img/blog/grpc/grpc-microservice.png)
+![grpc-microservice]({{ site.baseurl }}/assets/img/blog/grpc-microservice.png)
 
 #### # health checking
 

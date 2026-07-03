@@ -21,7 +21,7 @@ Clean Architecture (Robert C. Martin, 2012) giải quyết bằng **Dependency R
 
 ### # the dependency rule — quy tắc duy nhất
 
-![clean-architecture-rule](/assets/img/blog/clean-architecture/clean-architecture-rule.png)
+![clean-architecture-rule]({{ site.baseurl }}/assets/img/blog/clean-architecture-rule.png)
 
 4 layers từ trong ra ngoài:
 
@@ -38,7 +38,7 @@ Clean Architecture (Robert C. Martin, 2012) giải quyết bằng **Dependency R
 
 Clean Architecture và Hexagonal Architecture (Alistair Cockburn) là cùng 1 idea, khác cách trình bày. Hexagonal dùng metaphor "ports" (interfaces inner layer định nghĩa) và "adapters" (implementations outer layer cung cấp).
 
-![hexagonal-architecture](/assets/img/blog/clean-architecture/hexagonal-architecture.png)
+![hexagonal-architecture]({{ site.baseurl }}/assets/img/blog/hexagonal-architecture.png)
 
 **Inbound Ports** (driving): Use Case interfaces — ai muốn "dùng" application phải qua đây.
 **Outbound Ports** (driven): Repository/Gateway interfaces — application cần gì từ bên ngoài khai báo ở đây.

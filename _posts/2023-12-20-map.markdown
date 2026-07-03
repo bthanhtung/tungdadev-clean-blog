@@ -36,7 +36,7 @@ Bản chất của nó là sự kết hợp giữa mảng (`Array of Buckets`), 
 `HashMap` chứa một mảng các tham chiếu đến các `Node`. Mỗi phần tử trong mảng này là một `bucket` (ô chứa/thùng chứa),
 nó có thể nhận giá trị `null`, trỏ đến một `Node` đơn lẻ (nút đầu tiên của một danh sách liên kết) hoặc trỏ đến một `TreeNode` (gốc của một cây đỏ-đen).
 
-![map-internal-structure](/assets/img/blog/map/map-internal-structure.png)
+![map-internal-structure]({{ site.baseurl }}/assets/img/blog/map-internal-structure.png)
 
 Nếu một `bucket` chứa một danh sách liên kết, mỗi `Node` sẽ có một tham chiếu `next` để trỏ đến nút kế tiếp trong chuỗi.
 Khi độ dài của chuỗi vượt quá `8`, danh sách liên kết này sẽ được chuyển đổi thành một `cây đỏ-đen`,
@@ -188,7 +188,7 @@ hiệu quả vì nó áp dụng một khóa `(lock)` duy nhất lên toàn bộ 
 _**Cơ chế**_: Chia bảng băm thành nhiều `Segment` (mặc định 16). Mỗi `Segment` hoạt động như một bảng băm nhỏ và sở hữu một `Lock riêng` (ReentrantLock).
 Các thread ghi vào các `bucket` thuộc cùng một `Segment` vẫn phải đợi nhau.
 
-![segment-based-locking](/assets/img/blog/map/segment-based-locking.png)
+![segment-based-locking]({{ site.baseurl }}/assets/img/blog/segment-based-locking.png)
 
 **Java 8+**: Node-Level Locking (Khóa theo từng Bucket)
 

@@ -91,7 +91,7 @@ Broker là một Kafka server instance. Một Kafka cluster thường có nhiề
 - Phục vụ messages cho consumers
 - Tham gia vào quá trình replication
 
-![kafka-cluster](/assets/img/blog/kafka/kafka-cluster.png)
+![kafka-cluster]({{ site.baseurl }}/assets/img/blog/kafka-cluster.png)
 
 #### # topic — kênh dữ liệu
 
@@ -151,7 +151,7 @@ Thực tế: bắt đầu với 6-12 partitions cho hầu hết use cases. Scale
 
 Mỗi message trong một partition có một **offset** — một số nguyên tăng dần, bắt đầu từ 0. Offset chính là cách consumer biết mình đã đọc đến đâu.
 
-![kafka-offset](/assets/img/blog/kafka/kafka-offset.png)
+![kafka-offset]({{ site.baseurl }}/assets/img/blog/kafka-offset.png)
 
 Consumer tự quản lý offset của mình. Điều này có nghĩa:
 
@@ -163,7 +163,7 @@ Consumer tự quản lý offset của mình. Điều này có nghĩa:
 
 Đây là killer feature của Kafka. Một consumer group là một nhóm consumers cùng đọc một topic, trong đó **mỗi partition chỉ được assign cho đúng 1 consumer trong group**.
 
-![kafka-scaling-consumers](/assets/img/blog/kafka/kafka-scaling-consumers.png)
+![kafka-scaling-consumers]({{ site.baseurl }}/assets/img/blog/kafka-scaling-consumers.png)
 
 **Quy tắc:**
 
@@ -194,7 +194,7 @@ Nếu Broker 0 chết:
 ### # kafka message anatomy
 
 Mỗi Kafka message (hay record) gồm:
-![kafka-message-anatomy](/assets/img/blog/kafka/kafka-message-anatomy.png)
+![kafka-message-anatomy]({{ site.baseurl }}/assets/img/blog/kafka-message-anatomy.png)
 
 - **Key**: Quyết định message vào partition nào. Cùng key = cùng partition = đảm bảo ordering
 - **Value**: Payload chính (thường là JSON hoặc Avro)
@@ -792,7 +792,7 @@ public class OrderAggregate {
 
 Khi một business operation span qua nhiều services, bạn cần Saga pattern.
 
-![kafka-distributed-transactions](/assets/img/blog/kafka/kafka-distributed-transactions.png)
+![kafka-distributed-transactions]({{ site.baseurl }}/assets/img/blog/kafka-distributed-transactions.png)
 
 Triển khai code với Java:
 

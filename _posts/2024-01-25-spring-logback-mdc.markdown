@@ -65,7 +65,7 @@ Spring Boot uses Logback as its default logging framework, and for good reason:
 
 #### # logback architecture in 60 seconds
 
-![logback-architecture](/assets/img/blog/spring/logback-architecture.png)
+![logback-architecture]({{ site.baseurl }}/assets/img/blog/logback-architecture.png)
 
 - **Logger**: Named entity that captures log events (e.g., `com.myapp.service.OrderService`)
 - **Appender**: Destination for log events (console, file, network)
@@ -716,7 +716,7 @@ Before diving into code, let's align on terminology:
 - **Baggage**: Key-value pairs that propagate across service boundaries (like MDC, but distributed).
 - **Sampling**: The decision of whether to record and export a trace (not every trace needs to be stored).
 
-![mdc-trace](/assets/img/blog/spring/mdc-trace.png)
+![mdc-trace]({{ site.baseurl }}/assets/img/blog/mdc-trace.png)
 
 #### # setting up micrometer tracing with zipkin
 
@@ -1412,7 +1412,7 @@ Let's build a minimal but complete example that ties everything together. Imagin
 
 #### # project structure
 
-![logback-mdc-project-structure](/assets/img/blog/spring/logback-mdc-project-structure.png)
+![logback-mdc-project-structure]({{ site.baseurl }}/assets/img/blog/logback-mdc-project-structure.png)
 
 #### # ObservabilityConfig.java
 
