@@ -1,0 +1,195 @@
+---
+layout: post
+title: "aws s3 là cái quái gì?"
+date: 2025-11-29 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, aws-s3, best-practices, vietnamese]
+---
+
+Tiếp nối chuỗi bài viết chia sẻ về kỹ năng Backend và System Design, hôm nay chúng ta sẽ cùng "mổ xẻ" một trong những
+dịch vụ xương sống và phổ biến nhất của hệ sinh thái đám mây: Amazon S3 (Simple Storage Service).
+
+### # hệ sinh thái aws
+
+`Amazon Web Services (AWS)` là một nền tảng Cloud khổng lồ với hơn `200+` dịch vụ. Khi xây dựng kiến trúc Microservices,
+đây là những "gương mặt thân quen" mà ta thường xuyên làm việc nhất:
+
+- **Compute**: EC2 (máy ảo), ECS/EKS (run Docker/K8s container), Lambda (run code không cần server).
+- **Database & Cache**: RDS (MySQL, PostgreSQL...), ElastiCache (Redis/Memcached).
+- **Messaging**: SQS (Message Queue), SNS (Pub/Sub Notifications).
+- **Network & Routing**: VPC (mạng riêng ảo), ALB/NLB (cân bằng tải), Route 53 (DNS).
+- **Storage**: Và tất nhiên, ngôi sao của bài viết hôm nay - S3 (lưu trữ đối tượng).
+
+### # bản chất của s3
+
+Rất nhiều anh em mới làm quen thường nhầm lẫn `S3` với một ổ cứng thông thường (File System). Thực tế, `S3` là `Object Storage` (lưu trữ đối tượng).
+
+Nó không có hệ thống thư mục phân cấp thật sự. Tất cả các file (được gọi là objects) đều được ném vào chung một cái `"xô" (Bucket)`.
+Để tạo cảm giác có thư mục, `S3` dùng các chuỗi đường dẫn dài gọi là Key.
+
+`S3` được thiết kế với độ bền dữ liệu `(Durability)` cực khủng: `99.999999999%` (11 số 9).
+
+Các khái niệm "nằm lòng"
+
+- **Bucket**: Thùng chứa dữ liệu. Lưu ý: Tên `Bucket` phải là duy nhất `(globally unique)`.
+- **Object**: `File` cộng với `Metadata` đi kèm (kích thước tối đa lên đến 5TB/file).
+- **Key**: Chuỗi định danh duy nhất của object. Ví dụ: `users/avatars/user-123.jpg` (Toàn bộ chuỗi này chính là `Key`).
+- **Metadata**: Các cặp `Key-Value` lưu thông tin về file (VD: Content-Type).
+
+### # storage classes: chiến lược lưu trữ tối ưu chi phí
+
+Không phải dữ liệu nào cũng cần truy cập nhanh. Phân loại đúng dữ liệu giúp dự án tiết kiệm cả đống tiền cho công ty:
+
+- **Standard**: Dữ liệu truy cập thường xuyên `(Hot data)`. Đắt nhất nhưng nhanh nhất.
+- **Standard-IA (Infrequent Access)**: Dữ liệu ít truy cập (ví dụ: file đã tải lên quá 30 ngày) nhưng khi gọi là phải có ngay. Rẻ hơn `Standard`.
+- **One Zone-IA**: Dữ liệu có thể tạo lại được (như thumbnail ảnh). Lưu ở 1 Zone duy nhất nên rẻ hơn nữa.
+- **Glacier (Instant / Flexible / Deep Archive)**: Dùng để "cất kho" (Archive) các file log, report cũ. Cực rẻ, nhưng để lấy lại dữ liệu có thể mất từ vài phút đến vài chục tiếng.
+- **Intelligent-Tiering**: Không rành cách phân loại? Cứ bật tính năng này, AI của AWS sẽ tự động phân tích và luân chuyển dữ liệu sang tier tối ưu chi phí nhất.
+
+👉 Mẹo: Kết hợp với `Lifecycle Policies` để tự động dọn rác. Ví dụ: Viết rule tự động chuyển file `/documents` sang `Standard-IA` sau 30 ngày, cho vào `Glacier` sau 90 ngày và tự động xóa luôn sau 1 năm.
+
+### # presigned urls
+
+Thay vì luồng truyền thống: Client → Backend → S3 (làm Backend phải gánh băng thông và chịu tải nặng) → dùng `Presigned URL`.
+
+Cơ chế hoạt động (bypass backend):
+
+- Client gọi backend: "Cho mình xin quyền upload file avatar.png".
+- Backend gọi S3: "Tạo cho tôi một cái link tạm có quyền PUT, sống trong 15 phút".
+- Backend ném cái link đó về cho Client.
+- Client dùng link đó đẩy thẳng file lên S3 (Backend lúc này thảnh thơi nhâm nhi cafe).
+- Upload xong, Client báo lại Backend để lưu tên file vào Database.
+
+### # demo với spring boot
+
+Dưới đây là template code chuẩn chỉ để anh em tích hợp ngay vào dự án:
+
+#### # khai báo thư viện
+
+```xml
+<dependency>
+   <groupId>software.amazon.awssdk</groupId>
+   <artifactId>s3</artifactId>
+</dependency>
+<dependency>
+   <groupId>software.amazon.awssdk</groupId>
+   <artifactId>s3-transfer-manager</artifactId>
+</dependency>
+```
+
+#### # cấu hình s3 client
+
+```java
+@Configuration("s3Config")
+public class S3Config {
+
+   @Bean("s3Client")
+   public S3Client s3Client(@Value("${aws.region}") String region) {
+       return S3Client.builder()
+           .region(Region.of(region))
+           // Lấy credentials tự động từ biến môi trường hoặc IAM Role
+           .credentialsProvider(DefaultCredentialsProvider.create())
+           .build();
+   }
+
+   @Bean("s3Presigner")
+   public S3Presigner s3Presigner(@Value("${aws.region}") String region) {
+       return S3Presigner.builder()
+           .region(Region.of(region))
+           .credentialsProvider(DefaultCredentialsProvider.create())
+           .build();
+   }
+}
+```
+
+#### # s3 service core
+
+```java
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class S3StorageService {
+
+   private final S3Client s3Client;
+   private final S3Presigner presigner;
+
+   @Value("${aws.s3.bucket}")
+   private String bucket;
+
+   // Upload file cơ bản
+   public void upload(String key, byte[] content, String contentType) {
+       PutObjectRequest request = PutObjectRequest.builder()
+           .bucket(bucket).key(key).contentType(contentType).build();
+
+       s3Client.putObject(request, RequestBody.fromBytes(content));
+       log.info("Uploaded thành công | bucket={} | key={}", bucket, key);
+   }
+
+   // Lấy Download Presigned URL cho Client
+   public String generateDownloadUrl(String key, Duration expiration) {
+       GetObjectRequest getReq = GetObjectRequest.builder()
+           .bucket(bucket).key(key).build();
+
+       GetObjectPresignRequest presignReq = GetObjectPresignRequest.builder()
+           .signatureDuration(expiration)
+           .getObjectRequest(getReq).build();
+
+       return presigner.presignGetObject(presignReq).url().toString();
+   }
+
+   // Multipart upload (Cho file lớn > 100MB)
+   public void uploadLargeFile(String key, Path filePath) {
+       S3TransferManager transferManager = S3TransferManager.builder()
+           .s3Client(S3AsyncClient.builder().region(Region.AP_SOUTHEAST_1).build())
+           .build();
+
+       FileUpload upload = transferManager.uploadFile(UploadFileRequest.builder()
+           .putObjectRequest(PutObjectRequest.builder().bucket(bucket).key(key).build())
+           .source(filePath).build());
+
+       upload.completionFuture().join(); // Chờ hoàn tất
+   }
+}
+```
+
+### # bảo mật và phân quyền - iam & bucket policy
+
+Đừng bao giờ hardcode `AccessKey` và `SecretKey` vào source code. Hãy dùng:
+
+- **IAM Role**: Gắn quyền trực tiếp vào con `EC2/EKS` đang chạy ứng dụng.
+- **Bucket Policy**: Chặn ở tầng Bucket.
+
+Ví dụ, muốn chặn không cho ai đẩy file lên nếu file đó chưa được mã hóa bằng `AES256`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::my-production-bucket/*",
+      "Condition": {
+        "StringNotEquals": { "s3:x-amz-server-side-encryption": "AES256" }
+      }
+    }
+  ]
+}
+```
+
+### # checklist lên production
+
+Trước khi release, anh em nhớ check qua các mục này để kê cao gối ngủ:
+
+- Đã bật `Block Public Access` để tránh lộ lọt dữ liệu ra Internet.
+- Đã cấu hình `Server-Side Encryption` để bảo vệ data at rest.
+- Đã bật `Versioning` để lỡ có xóa/ghi đè nhầm thì vẫn khôi phục được.
+- Đã cấu hình `Lifecycle Rule` xóa rác `AbortIncompleteMultipartUpload`.
+- API cấp `Presigned URL` để `TTL` ngắn gọn (Max 15 phút).
+- Cấu hình `CORS` kĩ càng nếu cho Browser tải file trực tiếp qua `Presigned URL`.
+- Dùng chung 1 instance của `S3Client` (vì nó `Thread-safe`) thay vì khởi tạo liên tục.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

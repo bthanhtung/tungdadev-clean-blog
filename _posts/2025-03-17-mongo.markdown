@@ -1,0 +1,378 @@
+---
+layout: post
+title: "mongodb - toàn tập"
+date: 2025-03-17 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, mongodb, best-practices, vietnamese]
+---
+
+Trong bức tranh kiến trúc phần mềm hiện đại, việc lựa chọn cơ sở dữ liệu không chỉ dừng lại ở câu hỏi "lưu trữ cái gì", mà là "lưu trữ như thế nào để hệ thống có thể mở rộng một cách linh hoạt nhất". MongoDB không đơn thuần là một trào lưu NoSQL; nó là một giải pháp hoàn hảo cho các kiến trúc hướng Domain-Driven Design (DDD), nơi các Aggregates có thể được lưu trữ trọn vẹn trong một Document.
+
+Bài viết này là bản đúc kết từ những kinh nghiệm "thực chiến", giúp bạn nắm bắt MongoDB từ bản chất kiến trúc cho đến những tiêu chuẩn khắt khe nhất khi đưa lên môi trường Production.
+
+### # core philosophy
+
+MongoDB là một **Document Database**, lưu trữ dữ liệu dưới định dạng **BSON** (Binary JSON). Khác với sự cứng nhắc của các RDBMS truyền thống, MongoDB cung cấp một _Schema-flexible model_. Điều này cho phép các documents trong cùng một collection có cấu trúc khác nhau, mang lại sự linh hoạt tối đa trong quá trình tiến hóa phần mềm (Software Evolution).
+
+Hơn thế nữa, nó được thiết kế "from the ground up" cho khả năng mở rộng ngang (**Horizontal Scaling** thông qua Sharding) và tính sẵn sàng cao (**High Availability** thông qua Replica Sets).
+
+### # system architecture
+
+![mongo-architecture](/assets/img/blog/mongo/mongo-architecture.png)
+
+Replica Set: Đảm bảo dữ liệu không bao giờ bị mất. Cơ chế bầu chọn (Election) tự động kích hoạt khi node Primary sập, một node Secondary sẽ được thăng cấp để duy trì hệ thống.
+
+Sharded Cluster: Khi dữ liệu phình to vượt quá giới hạn của một máy chủ vật lý, MongoDB phân tán dữ liệu ra nhiều Shards dựa trên Shard Key, thông qua cổng giao tiếp mongos.
+
+### # data model
+
+Nếu trong SQL, "Chuẩn hóa" (Normalization) là tôn chỉ, thì trong MongoDB, "Dữ liệu được truy xuất cùng nhau nên được lưu cùng nhau" mới là chân lý.
+
+#### # document structure
+
+```json
+{
+ "_id": ObjectId("507f1f77bcf86cd799439011"),
+ "name": "John Doe",
+ "email": "john@example.com",
+ "age": 30,
+ "address": {
+   "street": "123 Main St",
+   "city": "Ho Chi Minh",
+   "country": "VN"
+ },
+ "tags": ["developer", "java"],
+ "orders": [
+   { "orderId": "ORD-001", "total": 500000, "date": ISODate("2024-01-15") }
+ ],
+ "createdAt": ISODate("2024-01-01T00:00:00Z"),
+ "metadata": { "source": "web", "version": 2 }
+}
+```
+
+#### # schema design patterns
+
+**Embedded (denormalized)**: Sử dụng khi dữ liệu có mối quan hệ 1-to-few, và luôn được đọc cùng nhau. Pattern này cực kỳ phù hợp để mô hình hóa một Aggregate Root trong Clean Architecture.
+
+```json
+// User với addresses embedded
+{
+  "_id": 1,
+  "name": "John",
+  "addresses": [
+    { "type": "home", "city": "HCM" },
+    { "type": "work", "city": "HN" }
+  ]
+}
+```
+
+**Referenced (normalized)** — data đọc riêng, hoặc grow unbounded: Sử dụng khi mối quan hệ là 1-to-many (dữ liệu mảng có thể phình to không giới hạn - unbounded growth), hoặc khi các thực thể cần được cập nhật độc lập.
+
+```json
+// Order references user
+{ "_id": "ORD-001", "userId": ObjectId("..."), "total": 500000 }
+```
+
+**Rules of thumb:**
+
+- Embed khi: 1-to-few, data luôn đọc cùng, không grow unbounded
+- Reference khi: 1-to-many (unbounded), data đọc riêng, cần update independently
+
+### # crud operations
+
+```javascript
+// Insert
+db.users.insertOne({ name: 'John', email: 'john@x.com' })
+db.users.insertMany([{ name: 'A' }, { name: 'B' }])
+
+// Find
+db.users.find({ age: { $gte: 18, $lte: 65 } })
+db.users.find({ tags: { $in: ['java', 'spring'] } })
+db.users.find({ 'address.city': 'HCM' }) // nested field
+db.users.findOne({ email: 'john@x.com' })
+
+// Update
+db.users.updateOne({ _id: ObjectId('...') }, { $set: { name: 'Bob' }, $inc: { loginCount: 1 } })
+db.users.updateMany({ status: 'inactive' }, { $set: { archived: true } })
+
+// Delete
+db.users.deleteOne({ _id: ObjectId('...') })
+db.users.deleteMany({ createdAt: { $lt: ISODate('2023-01-01') } })
+```
+
+### # indexes
+
+Một hệ thống backend tồi tệ nhất là hệ thống quét toàn bộ bảng (Collection Scan) cho mỗi request. MongoDB cung cấp bộ công cụ Indexing rất mạnh mẽ:
+
+```javascript
+// Single & Unique Index
+db.users.createIndex({ email: 1 }, { unique: true })
+
+// Compound Index: Sức mạnh thực sự
+db.orders.createIndex({ userId: 1, createdAt: -1 })
+
+// TTL Index: Tự động dọn dẹp dữ liệu (thích hợp cho session, OTP)
+db.sessions.createIndex({ createdAt: 1 }, { expireAfterSeconds: 3600 })
+
+// Partial Index: Chỉ index những document thỏa mãn điều kiện, tiết kiệm dung lượng RAM
+db.orders.createIndex({ createdAt: 1 }, { partialFilterExpression: { status: 'PENDING' } })
+
+// Wildcard (dynamic fields)
+db.products.createIndex({ 'metadata.$**': 1 })
+```
+
+#### # index strategies
+
+- Compound index: leftmost prefix rule (giống PostgreSQL)
+- Covered query: index chứa tất cả fields cần → không đọc document
+- ESR rule: Equality → Sort → Range (thứ tự fields trong compound index)
+
+### # aggregation pipeline
+
+Pipeline là nơi MongoDB thực sự tỏa sáng trong việc phân tích và biến đổi dữ liệu. Hãy hình dung nó giống như Java Stream API: dữ liệu đi qua từng "Stage", bị lọc, biến đổi và trả về kết quả cuối cùng.
+
+```javascript
+db.orders.aggregate([
+  // Stage 1: Filter
+  {
+    $match: { status: 'COMPLETED', createdAt: { $gte: ISODate('2024-01-01') } },
+  },
+
+  // Stage 2: Lookup (JOIN)
+  {
+    $lookup: {
+      from: 'users',
+      localField: 'userId',
+      foreignField: '_id',
+      as: 'user',
+    },
+  },
+  { $unwind: '$user' },
+
+  // Stage 3: Group
+  {
+    $group: {
+      _id: '$user.city',
+      totalRevenue: { $sum: '$total' },
+      orderCount: { $count: {} },
+      avgOrderValue: { $avg: '$total' },
+    },
+  },
+
+  // Stage 4: Sort
+  { $sort: { totalRevenue: -1 } },
+
+  // Stage 5: Limit
+  { $limit: 10 },
+
+  // Stage 6: Project (reshape output)
+  {
+    $project: {
+      city: '$_id',
+      totalRevenue: 1,
+      orderCount: 1,
+      avgOrderValue: { $round: ['$avgOrderValue', 2] },
+    },
+  },
+])
+```
+
+#### # common stages
+
+| Stage          | Mục đích                                      |
+| -------------- | --------------------------------------------- |
+| $match         | Filter documents (đặt đầu tiên để dùng index) |
+| $group         | Aggregate (sum, avg, count, min, max)         |
+| $project       | Reshape, add/remove fields                    |
+| $sort          | Sort results                                  |
+| $limit / $skip | Pagination                                    |
+| $lookup        | JOIN với collection khác                      |
+| $unwind        | Flatten arrays                                |
+| $addFields     | Add computed fields                           |
+| $facet         | Multiple pipelines parallel                   |
+
+### # replica set
+
+![mongo-replica](/assets/img/blog/mongo/mongo-replica.png)
+
+Election: nếu Primary chết → Secondaries vote → new Primary elected
+
+Minimum: 3 members (hoặc 2 + 1 arbiter)
+
+#### # read preference
+
+```java
+// Spring Data MongoDB
+@ReadPreference("secondaryPreferred")
+List<User> findByCity(String city);
+```
+
+| Preference         | Đọc từ                      | Use case                    |
+| ------------------ | --------------------------- | --------------------------- |
+| primary            | Primary only                | Default, strong consistency |
+| primaryPreferred   | Primary, fallback secondary | Mostly consistent           |
+| secondary          | Secondary only              | Analytics, reporting        |
+| secondaryPreferred | Secondary, fallback primary | Read scaling                |
+| nearest            | Lowest latency node         | Geo-distributed             |
+
+#### # write concern
+
+```java
+// Đảm bảo write replicated trước khi confirm
+mongoTemplate.setWriteConcern(WriteConcern.MAJORITY); // wait for majority ack
+```
+
+### # sharding
+
+Distribute data across multiple servers:
+
+```
+Shard Key: userId
+ userId hash % 3:
+   0 → Shard 1
+   1 → Shard 2
+   2 → Shard 3
+```
+
+#### # shard key selection (critical — cannot change easily!)
+
+- High cardinality (many unique values)
+- Even distribution
+- Query isolation (queries target 1 shard, not scatter)
+- Write distribution (avoid hot shard)
+
+Good: `{ userId: "hashed" }`, `{ tenantId: 1, createdAt: 1 }`
+Bad: `{ status: 1 }` (low cardinality), `{ createdAt: 1 }` (monotonic → hot shard)
+
+### # spring data mongodb
+
+Sự kết hợp giữa Spring Boot và MongoDB là một combo hoàn hảo cho các vi dịch vụ (microservices) hiện đại.
+
+#### # entity
+
+```java
+@Document(collection = "process_definitions")
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ProcessDefinition {
+
+   @Id
+   private String id;
+
+   @Indexed(unique = true)
+   private String key;
+
+   private String name;
+   private String workspaceId;
+   private int version;
+
+   @Field("created_at")
+   private Instant createdAt;
+
+   private Map<String, Object> metadata;
+   private List<String> tags;
+}
+```
+
+#### # repository
+
+```java
+public interface ProcessDefinitionRepository extends MongoRepository<ProcessDefinition, String> {
+
+   List<ProcessDefinition> findByWorkspaceIdAndVersion(String workspaceId, int version);
+
+   @Query("{ 'workspaceId': ?0, 'tags': { $in: ?1 } }")
+   List<ProcessDefinition> findByWorkspaceAndTags(String workspaceId, List<String> tags);
+
+   @Aggregation(pipeline = {
+       "{ $match: { workspaceId: ?0 } }",
+       "{ $group: { _id: '$key', latestVersion: { $max: '$version' } } }"
+   })
+   List<Document> findLatestVersions(String workspaceId);
+}
+```
+
+#### # mongotemplate (complex queries)
+
+Trong khi MongoRepository giải quyết tốt các CRUD cơ bản, MongoTemplate mang lại sức mạnh tùy biến tối đa cho những logic nghiệp vụ phức tạp.
+
+```java
+@Service
+public class ProcessDefinitionService {
+
+   private final MongoTemplate mongoTemplate;
+
+   public List<ProcessDefinition> search(String workspace, String keyword, Pageable pageable) {
+       Criteria criteria = new Criteria().andOperator(
+           Criteria.where("workspaceId").is(workspace),
+           new Criteria().orOperator(
+               Criteria.where("name").regex(keyword, "i"),
+               Criteria.where("key").regex(keyword, "i")
+           )
+       );
+
+       Query query = new Query(criteria)
+           .with(pageable)
+           .with(Sort.by(Sort.Direction.DESC, "created_at"));
+
+       return mongoTemplate.find(query, ProcessDefinition.class);
+   }
+}
+```
+
+### # change streams (real-time)
+
+Change Streams là một tính năng cực kỳ đắt giá khi bạn triển khai kiến trúc Event-Driven hoặc CQRS Pattern (Sử dụng MongoDB làm Query-side read model). Nó cho phép ứng dụng "lắng nghe" các thay đổi dữ liệu theo thời gian thực ở cấp độ database.
+
+```java
+@Component
+@Slf4j
+@RequiredArgsConstructor
+public class OrderChangeStreamListener {
+
+   private final MongoTemplate mongoTemplate;
+   private final KafkaTemplate<String, Object> kafkaTemplate;
+
+   @PostConstruct
+   public void watchOrderChanges() {
+       mongoTemplate.getCollection("orders")
+           .watch(List.of(
+               Aggregates.match(Filters.in("operationType", "insert", "update"))
+           ))
+           .forEach(event -> {
+               log.info("Document thay đổi: {} | Thao tác: {}",
+                   event.getDocumentKey(), event.getOperationType());
+
+               // Bắn event ra Kafka để các service khác xử lý (Outbox pattern)
+               kafkaTemplate.send("order-events", event.getFullDocument());
+           });
+   }
+}
+```
+
+### # performance tips
+
+- Đặt `$match` đầu pipeline (dùng index)
+- Dùng projection (chỉ lấy fields cần)
+- Avoid `$lookup` trên large collections (không có JOIN optimization)
+- Index cho sort fields
+- Compound index theo ESR rule
+- Monitor với `db.currentOp()`, `db.collection.explain()`
+- Set `maxTimeMS` cho queries
+
+### # production checklist
+
+Để hệ thống vững như bàn thạch trên production, đừng bỏ qua checklist sinh tử này:
+
+- [ ] Kiến trúc: Bắt buộc triển khai Replica set (tối thiểu 3 nodes).
+- [ ] Bảo đảm Dữ liệu (Write Concern): Phải set cấu hình MAJORITY để đảm bảo dữ liệu đã được ghi nhận trên phần lớn các nodes.
+- [ ] Điều hướng Đọc (Read Preference): Thiết lập secondaryPreferred cho các tác vụ xuất report nặng để giảm tải cho Primary.
+- [ ] Hiệu năng: Tuân thủ quy tắc ESR cho Compound Index. Tuyệt đối không dùng $lookup trên các collections chứa hàng triệu bản ghi nếu không có index hỗ trợ.
+- [ ] Bảo mật & Vận hành: Áp dụng Schema Validation rules ở mức Database để chặn dữ liệu rác. Giám sát chặt chẽ Oplog lag và Slow queries qua db.currentOp().
+- [ ] Mở rộng: Lên kế hoạch Shard Key thật kỹ lưỡng ngay từ Day-1 (bởi vì thay đổi Shard Key là một cơn ác mộng kiến trúc).
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

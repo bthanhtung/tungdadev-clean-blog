@@ -1,0 +1,381 @@
+---
+layout: post
+title: "mdc tracing"
+date: 2026-03-08 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, best-practices, vietnamese]
+---
+
+Trong kỷ nguyên của Microservices và Event-Driven Architecture, một request từ người dùng hiếm khi dừng lại ở một service duy nhất. Nó rẽ nhánh, kích hoạt hàng loạt các side-effects, đi qua API Gateway, lọt vào Message Brokers (RabbitMQ, Kafka), và chạm đến nhiều database khác nhau. Khi hệ thống gặp sự cố, việc tìm kiếm nguyên nhân gốc rễ (root cause) giữa hàng triệu dòng log phi cấu trúc chẳng khác nào mò kim đáy bể.
+
+Đó là lúc Distributed Tracing và MDC (Mapped Diagnostic Context) trở thành tiêu chuẩn bắt buộc. Bài viết này sẽ mổ xẻ bản chất của kỹ thuật này và cách hiện thực hóa nó một cách tinh tế nhất trong hệ sinh thái Java/Spring Boot.
+
+### # bản chất
+
+MDC không phải là một công nghệ quá mới mẻ, nhưng việc hiểu sâu về nó là nền tảng để thiết kế hệ thống logging chuẩn mực. Về cốt lõi, MDC là một cấu trúc dữ liệu key-value map được quản lý trên từng thread (per-thread) bởi các logging framework như SLF4J, Logback hay Log4j2.
+
+Tính năng này cho phép chúng ta "gắn" những dữ liệu ngữ cảnh (context data) như traceId, userId, requestId vào mọi dòng log được sinh ra bởi thread đó, mà không cần phải truyền các parameter này qua từng layer của ứng dụng một cách lộn xộn, phá vỡ Clean Architecture.
+
+#### # cơ chế hoạt động (threadlocal)
+
+MDC sử dụng ThreadLocal bên dưới system. Điều này đảm bảo tính biệt lập: ngữ cảnh của luồng xử lý này sẽ không dẫm chân lên luồng xử lý khác.
+
+```java
+// Thread-1: Đang xử lý đơn hàng của user-1
+MDC.put("traceId", "abc-123");
+log.info("Bắt đầu khởi tạo đơn hàng");
+// -> [abc-123] Bắt đầu khởi tạo đơn hàng
+
+// Thread-2: Đang xử lý thanh toán của user-2 (Hoàn toàn độc lập)
+MDC.put("traceId", "def-456");
+log.info("Xử lý giao dịch");
+// -> [def-456] Xử lý giao dịch
+```
+
+Nguyên tắc cốt tử: Luôn phải gọi MDC.clear() trong khối finally. Nếu không, khi thread được trả về Thread Pool, các request đến sau dùng chung thread này sẽ bị "nhiễm" context cũ, dẫn đến rác log và sai lệch hoàn toàn dữ liệu tracing.
+
+#### # log pattern config (logback)
+
+```xml
+<pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%X{traceId}] [%X{spanId}] [%thread] %-5level %logger{36} - %msg%n</pattern>
+```
+
+`%X{key}` = lấy value từ MDC.
+
+#### # sử dụng cơ bản
+
+```java
+import org.slf4j.MDC;
+
+// Set context
+MDC.put("traceId", "abc-123");
+MDC.put("userId", "user-1");
+
+log.info("Order created | orderId={}", orderId);
+// Output: 2024-01-15 10:30:00.123 [abc-123] [user-1] INFO - Order created | orderId=ORD-001
+
+// Clear khi xong (QUAN TRỌNG — tránh leak sang request khác)
+MDC.clear();
+```
+
+### # filter/interceptor pattern (spring boot)
+
+#### # http request filter
+
+Cách thanh lịch nhất để khởi tạo MDC là chặn ngay tại cổng vào của ứng dụng (Presentation Layer) bằng cách sử dụng Filter hoặc Interceptor.
+
+```java
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class TraceIdFilter extends OncePerRequestFilter {
+
+   private static final String TRACE_ID_HEADER = "X-Trace-Id";
+   private static final String SPAN_ID_HEADER = "X-Span-Id";
+
+   @Override
+   protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain chain) throws ServletException, IOException {
+       try {
+           // Lấy từ header (propagate từ upstream) hoặc tạo mới
+           String traceId = request.getHeader(TRACE_ID_HEADER);
+           if (traceId == null || traceId.isBlank()) {
+               traceId = UUID.randomUUID().toString().replace("-", "");
+           }
+           String spanId = UUID.randomUUID().toString().substring(0, 16);
+
+           MDC.put("traceId", traceId);
+           MDC.put("spanId", spanId);
+           MDC.put("method", request.getMethod());
+           MDC.put("uri", request.getRequestURI());
+
+           // Set response header để client/downstream biết
+           response.setHeader(TRACE_ID_HEADER, traceId);
+
+           chain.doFilter(request, response);
+       } finally {
+           MDC.clear(); // LUÔN clear
+       }
+   }
+}
+```
+
+### # propagation giữa services
+
+Một request hiếm khi đứng yên. Nó di chuyển qua mạng. Thách thức của Distributed Tracing là làm sao "vận chuyển" được traceId này băng qua các giao thức khác nhau (HTTP, AMQP, TCP).
+
+#### # rest calls (RestTemplate/WebClient)
+
+Khi gọi sang một service khác qua HTTP, ta cần nhét traceId vào Header của request mới.
+
+```java
+@Configuration
+public class RestTemplateConfig {
+
+   @Bean
+   public RestTemplate restTemplate() {
+       RestTemplate template = new RestTemplate();
+       template.setInterceptors(List.of((request, body, execution) -> {
+           // Propagate traceId qua HTTP header
+           String traceId = MDC.get("traceId");
+           if (traceId != null) {
+               request.getHeaders().set("X-Trace-Id", traceId);
+           }
+           return execution.execute(request, body);
+       }));
+       return template;
+   }
+}
+```
+
+#### # rabbitmq (message headers)
+
+Trong các kiến trúc xử lý bất đồng bộ, message broker là xương sống. Context phải được bảo toàn xuyên suốt quá trình Event Streaming.
+
+Với RabbitMQ: Chúng ta inject context vào Message Properties.
+
+```java
+// Producer: gắn traceId vào message header
+rabbitTemplate.convertAndSend(exchange, routingKey, payload, message -> {
+   message.getMessageProperties().setHeader("X-Trace-Id", MDC.get("traceId"));
+   return message;
+});
+
+// Consumer: lấy traceId từ message header
+@RabbitListener(queues = "order.queue")
+public void handle(Message message) {
+   String traceId = message.getMessageProperties().getHeader("X-Trace-Id");
+   MDC.put("traceId", traceId != null ? traceId : UUID.randomUUID().toString());
+   try {
+       // process
+   } finally {
+       MDC.clear();
+   }
+}
+```
+
+#### # kafka (record headers)
+
+Với Kafka: Khái niệm tương đương là Record Headers.
+
+```java
+// Producer
+ProducerRecord<String, Object> record = new ProducerRecord<>(topic, key, value);
+record.headers().add("X-Trace-Id", MDC.get("traceId").getBytes());
+kafkaTemplate.send(record);
+
+// Consumer
+@KafkaListener(topics = "orders")
+public void handle(ConsumerRecord<String, Object> record) {
+   Header traceHeader = record.headers().lastHeader("X-Trace-Id");
+   String traceId = traceHeader != null ? new String(traceHeader.value()) : UUID.randomUUID().toString();
+   MDC.put("traceId", traceId);
+   try {
+       // process
+   } finally {
+       MDC.clear();
+   }
+}
+```
+
+#### # gRPC (metadata)
+
+```java
+// Client interceptor
+public class TraceIdClientInterceptor implements ClientInterceptor {
+   private static final Metadata.Key<String> TRACE_KEY =
+       Metadata.Key.of("x-trace-id", Metadata.ASCII_STRING_MARSHALLER);
+
+   @Override
+   public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+           MethodDescriptor<ReqT, RespT> method, CallOptions options, Channel next) {
+       return new ForwardingClientCall.SimpleForwardingClientCall<>(next.newCall(method, options)) {
+           @Override
+           public void start(Listener<RespT> listener, Metadata headers) {
+               String traceId = MDC.get("traceId");
+               if (traceId != null) headers.put(TRACE_KEY, traceId);
+               super.start(listener, headers);
+           }
+       };
+   }
+}
+
+// Server interceptor
+public class TraceIdServerInterceptor implements ServerInterceptor {
+   @Override
+   public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+           ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+       String traceId = headers.get(TRACE_KEY);
+       if (traceId == null) traceId = UUID.randomUUID().toString();
+       MDC.put("traceId", traceId);
+       return next.startCall(call, headers);
+   }
+}
+```
+
+### # async/thread pool — mdc bị mất!
+
+Đây là rào cản kỹ thuật mà 90% backend engineers mắc phải khi mới làm quen với hệ thống đồng thời (concurrency). Vì MDC bám vào ThreadLocal, ngay khi bạn đẩy một tác vụ sang Thread Pool (thông qua @Async hoặc CompletableFuture), Thread mới sẽ hoàn toàn trống trơn context. Logs sinh ra từ background job sẽ bị "mồ côi" (orphan logs).
+
+#### # fix: mdc-aware TaskExecutor
+
+Chìa khóa ở đây là bắt lại (capture) trạng thái MDC của luồng gốc, và bơm (inject) nó vào luồng mới trước khi thực thi.
+
+```java
+@Configuration
+@EnableAsync
+public class AsyncConfig {
+
+    @Bean(name = "applicationTaskExecutor")
+    public Executor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10);
+        executor.setMaxPoolSize(50);
+        executor.setQueueCapacity(1000);
+        executor.setThreadNamePrefix("Async-");
+        // KEY CONFIGURATION: Bơm context vào các thread con
+        executor.setTaskDecorator(new MdcTaskDecorator());
+        executor.initialize();
+        return executor;
+    }
+}
+
+public class MdcTaskDecorator implements TaskDecorator {
+    @Override
+    public Runnable decorate(Runnable runnable) {
+        // Capture context từ luồng gọi (Calling Thread)
+        Map<String, String> contextMap = MDC.getCopyOfContextMap();
+
+        return () -> {
+            try {
+                // Phục hồi context bên trong luồng thực thi (Worker Thread)
+                if (contextMap != null) {
+                    MDC.setContextMap(contextMap);
+                }
+                runnable.run();
+            } finally {
+                // Dọn dẹp sạch sẽ khi hoàn thành
+                MDC.clear();
+            }
+        };
+    }
+}
+```
+
+#### # fix: CompletableFuture
+
+```java
+// Wrap CompletableFuture
+Map<String, String> mdcContext = MDC.getCopyOfContextMap();
+
+CompletableFuture.supplyAsync(() -> {
+   MDC.setContextMap(mdcContext);
+   try {
+       return doWork();
+   } finally {
+       MDC.clear();
+   }
+}, mdcTaskExecutor);
+```
+
+### # spring cloud sleuth / micrometer tracing
+
+Nếu bạn không muốn tự implement các Interceptor một cách thủ công, Spring Boot 3 đã mang đến giải pháp tiêu chuẩn công nghiệp: Micrometer Tracing (kẻ kế thừa xứng đáng của Spring Cloud Sleuth).
+
+Chỉ cần thêm thư viện:
+
+```xml
+<dependency>
+   <groupId>io.micrometer</groupId>
+   <artifactId>micrometer-tracing-bridge-brave</artifactId>
+</dependency>
+```
+
+Framework sẽ âm thầm lo liệu mọi thứ:
+
+- Tự động sinh traceId (theo chuẩn W3C hoặc B3).
+- Propagate qua HTTP, gRPC, Kafka, RabbitMQ.
+- Đẩy thẳng vào MDC.
+- Cắm xuất sắc với các hệ thống visualize như Jaeger, Zipkin.
+
+### # tracing concepts
+
+Ghi log dưới dạng text thuần túy là cách làm của thập kỷ trước. Với hàng gigabytes log mỗi ngày, text parsing tốn kém một cách vô ích. Việc chuyển đổi sang JSON Format (Structured Logging) giúp các hệ thống như ELK Stack (Elasticsearch, Logstash, Kibana) hay Grafana Loki index dữ liệu với tốc độ ánh sáng.
+
+![tracing-concepts](/assets/img/blog/mdc/tracing-concepts.png)
+
+`traceId="abc-123"` là cố định cho toàn bộ `trace`; `spanId` là duy nhất cho mỗi `span`; và `parentSpanId` là `ID` của `span cha` đã gọi nó.
+
+#### # log output example
+
+```
+# Service A (API Gateway)
+2024-01-15 10:30:00.001 [traceId=abc123] [spanId=span-1] INFO  - Received POST /orders
+
+# Service B (Order Service)
+2024-01-15 10:30:00.050 [traceId=abc123] [spanId=span-2] INFO  - Creating order | orderId=ORD-001
+
+# Service C (Payment Service)
+2024-01-15 10:30:00.100 [traceId=abc123] [spanId=span-3] INFO  - Processing payment | amount=500000
+```
+
+Tìm tất cả logs của 1 request: `grep "abc123" *.log` hoặc filter trong ELK/Loki.
+
+### # structured logging (json)
+
+Cấu hình Logback đơn giản như sau:
+
+```xml
+<!-- logback-spring.xml -->
+<appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+   <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+       <includeMdcKeyName>traceId</includeMdcKeyName>
+       <includeMdcKeyName>spanId</includeMdcKeyName>
+       <includeMdcKeyName>userId</includeMdcKeyName>
+   </encoder>
+</appender>
+```
+
+Và kết quả thu được là những khối dữ liệu ngăn nắp, dễ dàng truy vấn (ví dụ: traceId: "abc123"):
+
+```json
+{
+  "@timestamp": "2026-06-28T10:30:00.001Z",
+  "level": "INFO",
+  "logger": "com.davintek.core.domain.OrderService",
+  "message": "Order validated successfully | orderId=ORD-001",
+  "traceId": "abc123",
+  "spanId": "span-2",
+  "userId": "user-1",
+  "thread": "http-nio-8080-exec-1"
+}
+```
+
+→ Dễ query trong ELK: `traceId: "abc123"` → tất cả logs của request đó.
+
+### # best practices
+
+- Luôn `MDC.clear()` trong finally block (tránh leak)
+- Dùng `MdcTaskDecorator` cho mọi async executor
+- TraceId format: 32 hex chars (compatible với OpenTelemetry)
+- Log format: `[traceId] [spanId] level logger - message`
+- Propagate qua TẤT CẢ boundaries: HTTP, MQ, gRPC, scheduled tasks
+- Structured logging (JSON) cho production → dễ search/aggregate
+- Đừng log sensitive data trong MDC (password, token)
+- Set MDC ngay đầu request lifecycle (filter/interceptor)
+
+### # production checklist
+
+Trước khi merge PR liên quan đến cơ chế tracing này vào nhánh main, hãy tự vấn bằng các tiêu chí sau:
+
+- [ ] No Context Leakage: Chắc chắn 100% mọi nơi dùng MDC.put đều có khối finally `{ MDC.clear(); }`.
+- [ ] Full Coverage Propagation: Đã cover toàn bộ các boundaries giao tiếp? (REST, gRPC, Kafka, RabbitMQ).
+- [ ] Async Safety: Mọi ThreadPool và CompletableFuture trong dự án đều đã được bọc bởi TaskDecorator hoặc Custom Executor.
+- [ ] Security Guard: Đảm bảo không ném dữ liệu nhạy cảm (PII, Passwords, Tokens) vào MDC.
+- [ ] Format Chuẩn Mực: Format log console đủ các yếu tố [traceId] [spanId] [level] [logger] - [message] và xuất JSON khi lên môi trường Production.
+
+Tracing không đơn thuần là việc ghi log. Đó là cách chúng ta xây dựng sự thấu hiểu sâu sắc (empathy) với hệ thống mà mình nhào nặn ra, từ đó làm chủ được nó ngay cả khi rủi ro ập đến.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

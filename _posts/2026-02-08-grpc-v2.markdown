@@ -1,0 +1,1241 @@
+---
+layout: post
+title: "grpc - toàn tập"
+date: 2026-02-08 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, grpc, best-practices, vietnamese]
+---
+
+Trong thế giới hệ thống phân tán và Microservices, khi bài toán không chỉ dừng lại ở việc các service "nói chuyện" được với nhau,
+mà phải là giao tiếp với độ trễ cực thấp (low latency) và thông lượng cực cao (high throughput), thì REST/JSON dần bộc lộ
+những giới hạn vật lý của nó. Đó là lúc chúng ta cần một tiêu chuẩn giao tiếp ở cấp độ kỹ thuật phần mềm sâu sắc hơn: gRPC.
+
+Bài viết này được đúc kết dưới góc nhìn của một Engineer, đi từ việc mổ xẻ những khái niệm cốt lõi nhất ở tầng byte,
+tầng network, cho đến việc áp dụng các best practices để xây dựng một hệ thống gRPC chuẩn chỉ, chịu tải cao với Spring Boot.
+
+### # bản chất
+
+gRPC - `Google Remote Procedure Call` là một framework mã nguồn mở cho phép bạn gọi một hàm trên server từ xa một cách
+tự nhiên như thể bạn đang gọi một hàm local (trong cùng một process).
+
+Khi client gọi method, `gRPC` sẽ serialize request thành định dạng nhị phân `(Protobuf)`, đẩy qua network bằng giao thức `HTTP/2`.
+Tại server, luồng dữ liệu được deserialize, xử lý và trả kết quả ngược lại theo quy trình tương tự.
+
+Sự khác biệt cốt lõi so với kiến trúc `REST`:
+
+- REST: Hướng tài nguyên - Resource-oriented (Ví dụ: GET /users/123).
+- gRPC: Hướng hành động - Action-oriented (Ví dụ: userService.GetUser(id=123)). Nó tập trung trực tiếp vào logic nghiệp vụ và các Operation.
+
+### # kiến trúc tổng quan
+
+![grpc-structure](/assets/img/blog/grpc/grpc-structure.png)
+
+### # protocol buffers (protobuf)
+
+Nếu `gRPC` là cơ thể thì `Protobuf `chính là trái tim. Đây là ngôn ngữ định nghĩa giao tiếp (IDL - Interface Definition Language)
+và cũng là công cụ serialize dữ liệu.
+
+#### # định nghĩa contract rõ ràng và chặt chẽ
+
+Thay vì dùng OpenAPI/Swagger một cách tùy chọn như REST, gRPC ép buộc phải định nghĩa `contract` ngay từ đầu thông qua file `.proto.`
+nhằm loại bỏ hoàn toàn sự mập mờ trong giao tiếp giữa các team.
+
+```protobuf
+syntax = "proto3";
+
+package user;
+
+option java_multiple_files = true;
+option java_package = "vn.com.davintek.internal.grpc.user";
+
+// 1. Service definition
+service UserService {
+    // Unary RPC
+    rpc GetUser (GetUserRequest) returns (UserResponse);
+    // Server streaming
+    rpc ListUsers (ListUsersRequest) returns (stream UserResponse);
+    // Client streaming
+    rpc UploadUsers (stream CreateUserRequest) returns (UploadSummary);
+    // Bidirectional streaming
+    rpc Chat (stream ChatMessage) returns (stream ChatMessage);
+}
+
+// 2. Messages definition
+message GetUserRequest {
+    string user_id = 1;
+}
+
+message UserResponse {
+    string id = 1;
+    string name = 2;
+    string email = 3;
+    int32 age = 4;
+    repeated string roles = 5;        // Tương đương List trong Java
+    map<string, string> metadata = 6; // Tương đương Map
+    UserStatus status = 7;
+    optional string phone = 8;        // Nullable field (Proto3)
+}
+
+enum UserStatus {
+    USER_STATUS_UNSPECIFIED = 0;      // Bắt buộc giá trị mặc định là 0
+    USER_STATUS_ACTIVE = 1;
+    USER_STATUS_INACTIVE = 2;
+    USER_STATUS_BANNED = 3;
+}
+```
+
+#### # wire format (cách protobuf encode)
+
+Khác với `JSON` gửi đi toàn bộ text (bao gồm cả ngoặc nhọn, dấu phẩy và tên trường), `Protobuf` mã hóa mọi thứ thành dạng
+nhị phân theo cấu trúc: `[field_number << 3 | wire_type] + [value]`
+
+| Wire Type | Meaning          | Dùng cho                                   |
+| --------- | ---------------- | ------------------------------------------ |
+| 0         | Varint           | int32, int64, uint32, bool, enum           |
+| 1         | 64-bit           | fixed64, double                            |
+| 2         | Length-delimited | string, bytes, embedded messages, repeated |
+| 5         | 32-bit           | fixed32, float                             |
+
+Ví dụ encode `UserResponse{id: "abc", age: 25}`:
+
+```
+Field 1 (id), wire type 2: 0x0A 0x03 "abc" (tag=0A, length=3, value="abc")
+Field 4 (age), wire type 0: 0x20 0x19 (tag=20, varint=25)
+```
+
+Tại sao nhỏ hơn `JSON`:
+
+- Không có field names trong payload (chỉ field numbers)
+- Varint encoding cho số nhỏ (25 = 1 byte, thay vì "25" = 2 bytes text)
+- Không có delimiters (`{`, `}`, `"`, `:`, `,`)
+- Default values không được encode (zero value = không gửi)
+
+Kỹ thuật `Varint` cực kỳ thông minh: Thay vì luôn dùng `4 bytes` để lưu số nguyên 25, Varint chỉ dùng đúng `1 byte`.
+Kết hợp với việc không gửi tên trường (chỉ gửi field number) và không gửi các giá trị mặc định (zero value),
+payload của `Protobuf` thường nhỏ hơn JSON từ `3-10 lần`, và tốc độ serialize/deserialize nhanh hơn `5-20 lần`.
+
+### # http/2 transport
+
+`gRPC` không thể đạt được sức mạnh tối đa nếu thiếu `HTTP/2`. Sự kết hợp này mang lại những khả năng vượt trội so với `HTTP/1.1` truyền thống.
+
+#### # tại sao http/2 quan trọng cho grpc
+
+| Feature     | HTTP/1.1                               | HTTP/2                                                                        |
+| ----------- | -------------------------------------- | ----------------------------------------------------------------------------- |
+| Connections | 1 request/connection (hoặc pipelining) | Multiplexing: Xử lý hàng nghìn requests đồng thời trên đúng 1 TCP connection. |
+| Headers     | Text, gửi lại mỗi request              | HPACK compression: Nén header, chỉ gửi những thông tin thay đổi (diff).       |
+| Data format | Text                                   | Binary framing: Chia nhỏ thành các frame nhị phân, dễ dàng phân tích cú pháp. |
+| Server push | Không                                  | Có                                                                            |
+| Streaming   | Chunked transfer (hack)                | Native bidirectional streaming: Luồng dữ liệu hai chiều thực thụ.             |
+
+#### # multiplexing
+
+Với HTTP/2, các luồng dữ liệu (stream) chạy đồng thời mà không hề block lẫn nhau.
+
+![grpc-tcp-connection](/assets/img/blog/grpc/grpc-tcp-connection.png)
+
+HTTP/1.1 cần mở nhiều TCP connections (browser limit 6/domain). HTTP/2 chỉ cần 1 connection cho tất cả.
+
+### # 4 communication patterns
+
+#### # unary rpc (request-response)
+
+Giống hệt cách REST hoạt động. Phù hợp cho CRUD, truy vấn đơn giản.
+
+![grpc-unary](/assets/img/blog/grpc/grpc-unary.png)
+
+Code example với Java + Spring Boot:
+
+```java
+// Server implementation
+@GrpcService
+public class UserServiceImpl extends UserServiceGrpc.UserServiceImplBase {
+    @Override
+    public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+        UserResponse user = UserResponse.newBuilder()
+            .setId(request.getUserId())
+            .setName("John Doe")
+            .build();
+
+        responseObserver.onNext(user);
+        responseObserver.onCompleted(); // Đóng stream
+    }
+}
+```
+
+#### # server streaming
+
+Client gửi 1 request, Server liên tục trả về nhiều responses. Thích hợp cho trích xuất tập dữ liệu lớn, export file, log streaming.
+
+![grpc-multi-response](/assets/img/blog/grpc/grpc-multi-response.png)
+
+```java
+// Server
+@Override
+public void listUsers(ListUsersRequest request, StreamObserver<UserResponse> responseObserver) {
+   List<User> users = userRepository.findAll(request.getFilter());
+
+   for (User user : users) {
+       responseObserver.onNext(toProto(user)); // Gửi từng chunk
+   }
+   responseObserver.onCompleted();
+}
+
+// Client
+Iterator<UserResponse> users = userStub.listUsers(request);
+while (users.hasNext()) {
+   UserResponse user = users.next();
+   // process each user
+}
+```
+
+#### # client streaming
+
+Client liên tục bơm dữ liệu lên, Server chờ nhận đủ mới trả về 1 kết quả duy nhất. Hoàn hảo cho việc Upload file lớn, IoT sensor data ingestion, hoặc Batch processing.
+
+![grpc-multi-req](/assets/img/blog/grpc/grpc-multi-req.png)
+
+```java
+// Server
+@Override
+public StreamObserver<CreateUserRequest> uploadUsers(StreamObserver<UploadSummary> responseObserver) {
+   return new StreamObserver<>() {
+       int received = 0, created = 0, failed = 0;
+
+       @Override
+       public void onNext(CreateUserRequest request) {
+           received++;
+           try {
+               userRepository.save(toEntity(request));
+               created++;
+           } catch (Exception e) {
+               failed++;
+           }
+       }
+
+       @Override
+       public void onCompleted() {
+           responseObserver.onNext(UploadSummary.newBuilder()
+               .setTotalReceived(received)
+               .setTotalCreated(created)
+               .setTotalFailed(failed)
+               .build());
+           responseObserver.onCompleted();
+       }
+
+       @Override
+       public void onError(Throwable t) {
+           log.error("Client stream error", t);
+       }
+   };
+}
+```
+
+#### # bidirectional streaming
+
+Cả Client và Server đều gửi stream độc lập, không ai phải đợi ai. Áp dụng cho Real-time Chat, game nhiều người chơi, hoặc tương tác AI (streaming tokens).
+
+![grpc-bidirectional-streaming](/assets/img/blog/grpc/grpc-bidirectional-streaming.png)
+
+```java
+// Server
+@Override
+public StreamObserver<ChatMessage> chat(StreamObserver<ChatMessage> responseObserver) {
+   return new StreamObserver<>() {
+       @Override
+       public void onNext(ChatMessage message) {
+           // Echo back or broadcast
+           ChatMessage reply = ChatMessage.newBuilder()
+               .setSenderId("server")
+               .setContent("Received: " + message.getContent())
+               .setTimestamp(System.currentTimeMillis())
+               .build();
+           responseObserver.onNext(reply);
+       }
+
+       @Override
+       public void onCompleted() {
+           responseObserver.onCompleted();
+       }
+
+       @Override
+       public void onError(Throwable t) {
+           log.error("Stream error", t);
+       }
+   };
+}
+```
+
+### # error handling
+
+#### # grpc status codes
+
+| Code | Name                | Ý nghĩa                      | Tương đương HTTP |
+| ---- | ------------------- | ---------------------------- | ---------------- |
+| 0    | OK                  | Thành công                   | 200              |
+| 1    | CANCELLED           | Client hủy request           | 499              |
+| 2    | UNKNOWN             | Lỗi không xác định           | 500              |
+| 3    | INVALID_ARGUMENT    | Input không hợp lệ           | 400              |
+| 4    | DEADLINE_EXCEEDED   | Timeout                      | 504              |
+| 5    | NOT_FOUND           | Resource không tồn tại       | 404              |
+| 6    | ALREADY_EXISTS      | Resource đã tồn tại          | 409              |
+| 7    | PERMISSION_DENIED   | Không có quyền               | 403              |
+| 8    | RESOURCE_EXHAUSTED  | Rate limit / quota           | 429              |
+| 9    | FAILED_PRECONDITION | Precondition failed          | 400              |
+| 10   | ABORTED             | Conflict (optimistic lock)   | 409              |
+| 11   | OUT_OF_RANGE        | Giá trị ngoài range          | 400              |
+| 12   | UNIMPLEMENTED       | Method chưa implement        | 501              |
+| 13   | INTERNAL            | Internal server error        | 500              |
+| 14   | UNAVAILABLE         | Service tạm thời unavailable | 503              |
+| 16   | UNAUTHENTICATED     | Chưa authenticate            | 401              |
+
+#### # trả error từ server
+
+```java
+@Override
+public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+   if (request.getUserId().isBlank()) {
+       responseObserver.onError(Status.INVALID_ARGUMENT
+           .withDescription("user_id must not be empty")
+           .asRuntimeException());
+       return;
+   }
+
+   User user = userRepository.findById(request.getUserId()).orElse(null);
+   if (user == null) {
+       responseObserver.onError(Status.NOT_FOUND
+           .withDescription("User not found: " + request.getUserId())
+           .asRuntimeException());
+       return;
+   }
+
+   responseObserver.onNext(toProto(user));
+   responseObserver.onCompleted();
+}
+```
+
+#### # rich error details (google error model)
+
+```java
+import com.google.rpc.BadRequest;
+import com.google.rpc.ErrorInfo;
+import io.grpc.protobuf.StatusProto;
+
+// Trả error với metadata chi tiết
+com.google.rpc.Status status = com.google.rpc.Status.newBuilder()
+   .setCode(Code.INVALID_ARGUMENT.getNumber())
+   .setMessage("Validation failed")
+   .addDetails(Any.pack(BadRequest.newBuilder()
+       .addFieldViolations(BadRequest.FieldViolation.newBuilder()
+           .setField("email")
+           .setDescription("Invalid email format")
+           .build())
+       .addFieldViolations(BadRequest.FieldViolation.newBuilder()
+           .setField("age")
+           .setDescription("Must be between 1 and 150")
+           .build())
+       .build()))
+   .build();
+
+responseObserver.onError(StatusProto.toStatusRuntimeException(status));
+```
+
+#### # client-side error handling
+
+```java
+try {
+   UserResponse response = userStub.getUser(request);
+} catch (StatusRuntimeException e) {
+   switch (e.getStatus().getCode()) {
+       case NOT_FOUND:
+           log.warn("User not found: {}", e.getStatus().getDescription());
+           break;
+       case UNAVAILABLE:
+           log.error("Service unavailable, will retry");
+           // retry logic
+           break;
+       case DEADLINE_EXCEEDED:
+           log.error("Request timed out");
+           break;
+       default:
+           log.error("gRPC error: {} - {}", e.getStatus().getCode(), e.getStatus().getDescription());
+   }
+}
+```
+
+### # interceptors (middleware)
+
+Trong kiến trúc phần mềm chuyên nghiệp, việc bóc tách các cross-cutting concerns (như Logging, Tracing, Authentication) ra khỏi business logic là bắt buộc. Ở REST chúng ta dùng Filter/Interceptor, với gRPC, cơ chế này cũng mang tên Interceptors.
+
+#### # server interceptor
+
+```java
+public class TraceIdServerInterceptor implements ServerInterceptor {
+
+   private static final Metadata.Key<String> TRACE_ID_KEY =
+       Metadata.Key.of("x-trace-id", Metadata.ASCII_STRING_MARSHALLER);
+
+   @Override
+   public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+           ServerCall<ReqT, RespT> call,
+           Metadata headers,
+           ServerCallHandler<ReqT, RespT> next) {
+
+       String traceId = headers.get(TRACE_ID_KEY);
+       if (traceId == null) {
+           traceId = UUID.randomUUID().toString();
+       }
+
+       // Put traceId in context for downstream use
+       Context ctx = Context.current().withValue(TRACE_ID_CONTEXT_KEY, traceId);
+       return Contexts.interceptCall(ctx, call, headers, next);
+   }
+}
+```
+
+#### # client interceptor
+
+```java
+public class AuthClientInterceptor implements ClientInterceptor {
+
+   private static final Metadata.Key<String> AUTH_KEY =
+       Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+   private final TokenProvider tokenProvider;
+
+   @Override
+   public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+           MethodDescriptor<ReqT, RespT> method,
+           CallOptions callOptions,
+           Channel next) {
+
+       return new ForwardingClientCall.SimpleForwardingClientCall<>(
+               next.newCall(method, callOptions)) {
+           @Override
+           public void start(Listener<RespT> responseListener, Metadata headers) {
+               headers.put(AUTH_KEY, "Bearer " + tokenProvider.getToken());
+               super.start(responseListener, headers);
+           }
+       };
+   }
+}
+```
+
+#### # logging interceptor
+
+```java
+public class LoggingServerInterceptor implements ServerInterceptor {
+
+   @Override
+   public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+           ServerCall<ReqT, RespT> call,
+           Metadata headers,
+           ServerCallHandler<ReqT, RespT> next) {
+
+       long startTime = System.nanoTime();
+       String methodName = call.getMethodDescriptor().getFullMethodName();
+
+       log.info("gRPC request | method={}", methodName);
+
+       ServerCall<ReqT, RespT> wrappedCall = new ForwardingServerCall.SimpleForwardingServerCall<>(call) {
+           @Override
+           public void close(Status status, Metadata trailers) {
+               long duration = (System.nanoTime() - startTime) / 1_000_000;
+               log.info("gRPC response | method={} | status={} | duration={}ms",
+                   methodName, status.getCode(), duration);
+               super.close(status, trailers);
+           }
+       };
+
+       return next.startCall(wrappedCall, headers);
+   }
+}
+```
+
+#### # interceptor chain order
+
+```java
+Server server = ServerBuilder.forPort(9090)
+   .intercept(new TraceIdServerInterceptor())    // chạy đầu tiên
+   .intercept(new AuthServerInterceptor())       // chạy thứ 2
+   .intercept(new LoggingServerInterceptor())    // chạy thứ 3
+   .addService(new UserServiceImpl())
+   .build();
+
+// Lưu ý: interceptors chạy theo thứ tự NGƯỢC (last added = first executed)
+// Thực tế: Logging → Auth → TraceId → Service
+```
+
+### # deadlines & timeouts
+
+```java
+// Client set deadline (timeout)
+UserResponse response = userStub
+   .withDeadlineAfter(5, TimeUnit.SECONDS)  // timeout 5s
+   .getUser(request);
+
+// Server check deadline
+@Override
+public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+   if (Context.current().isCancelled()) {
+       responseObserver.onError(Status.CANCELLED
+           .withDescription("Client cancelled or deadline exceeded")
+           .asRuntimeException());
+       return;
+   }
+   // ... process
+}
+```
+
+**Deadline propagation:** Khi service A gọi service B gọi service C, deadline tự động propagate. Nếu client set 5s, và A mất 2s, B chỉ còn 3s để hoàn thành (bao gồm call tới C).
+
+### # metadata (headers)
+
+```java
+// Client gửi metadata
+Metadata metadata = new Metadata();
+metadata.put(Metadata.Key.of("x-workspace-id", Metadata.ASCII_STRING_MARSHALLER), "ws-123");
+metadata.put(Metadata.Key.of("x-request-id", Metadata.ASCII_STRING_MARSHALLER), UUID.randomUUID().toString());
+
+UserResponse response = MetadataUtils.attachHeaders(userStub, metadata)
+   .getUser(request);
+
+// Server đọc metadata
+@Override
+public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+   String workspaceId = WORKSPACE_ID_CTX_KEY.get();  // from interceptor context
+   // ...
+}
+```
+
+### # spring boot integration
+
+Spring Boot làm cho việc cấu hình gRPC trở nên thanh thoát và dễ quản lý hơn rất nhiều thông qua thư viện `grpc-spring-boot-starter`.
+
+#### # dependencies
+
+Sử dụng Plugin của Maven để tự động generate code Java từ file `.proto`.
+
+```xml
+<properties>
+   <grpc.version>1.62.2</grpc.version>
+   <protobuf.version>3.25.3</protobuf.version>
+   <grpc-spring-boot.version>3.1.0.RELEASE</grpc-spring-boot.version>
+</properties>
+
+<dependencies>
+   <!-- gRPC Spring Boot Starter (net.devh) -->
+   <dependency>
+       <groupId>net.devh</groupId>
+       <artifactId>grpc-spring-boot-starter</artifactId>
+       <version>${grpc-spring-boot.version}</version>
+   </dependency>
+
+   <!-- Protobuf -->
+   <dependency>
+       <groupId>com.google.protobuf</groupId>
+       <artifactId>protobuf-java</artifactId>
+       <version>${protobuf.version}</version>
+   </dependency>
+
+   <!-- gRPC Protobuf -->
+   <dependency>
+       <groupId>io.grpc</groupId>
+       <artifactId>grpc-protobuf</artifactId>
+       <version>${grpc.version}</version>
+   </dependency>
+
+   <!-- gRPC Stub -->
+   <dependency>
+       <groupId>io.grpc</groupId>
+       <artifactId>grpc-stub</artifactId>
+       <version>${grpc.version}</version>
+   </dependency>
+</dependencies>
+
+<!-- Protobuf Maven Plugin (code generation) -->
+<build>
+   <extensions>
+       <extension>
+           <groupId>kr.motd.maven</groupId>
+           <artifactId>os-maven-plugin</artifactId>
+           <version>1.7.1</version>
+       </extension>
+   </extensions>
+   <plugins>
+       <plugin>
+           <groupId>org.xolstice.maven.plugins</groupId>
+           <artifactId>protobuf-maven-plugin</artifactId>
+           <version>0.6.1</version>
+           <configuration>
+               <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
+               <pluginId>grpc-java</pluginId>
+               <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
+           </configuration>
+           <executions>
+               <execution>
+                   <goals>
+                       <goal>compile</goal>
+                       <goal>compile-custom</goal>
+                   </goals>
+               </execution>
+           </executions>
+       </plugin>
+   </plugins>
+</build>
+```
+
+#### # application config
+
+Cấu hình linh hoạt các thông số mạng và keep-alive để giữ connection ổn định.
+
+```yaml
+# application.yml
+grpc:
+  server:
+    port: 9090
+    security:
+      enabled: false # true cho production với TLS
+  client:
+    user-service:
+      address: 'static://localhost:9090'
+      negotiationType: plaintext # TLS cho production
+      enableKeepAlive: true
+      keepAliveTime: 30s
+      keepAliveTimeout: 5s
+```
+
+#### # server implementation
+
+```java
+@GrpcService  // tự động register với gRPC server
+@Slf4j
+public class UserGrpcService extends UserServiceGrpc.UserServiceImplBase {
+
+   private final UserService userService;  // inject Spring service
+
+   public UserGrpcService(UserService userService) {
+       this.userService = userService;
+   }
+
+   @Override
+   public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+       try {
+           User user = userService.findById(request.getUserId());
+           responseObserver.onNext(toProto(user));
+           responseObserver.onCompleted();
+       } catch (NotFoundException e) {
+           responseObserver.onError(Status.NOT_FOUND
+               .withDescription(e.getMessage())
+               .asRuntimeException());
+       } catch (Exception e) {
+           log.error("Error getting user: {}", request.getUserId(), e);
+           responseObserver.onError(Status.INTERNAL
+               .withDescription("Internal error")
+               .asRuntimeException());
+       }
+   }
+
+   private UserResponse toProto(User user) {
+       return UserResponse.newBuilder()
+           .setId(user.getId())
+           .setName(user.getName())
+           .setEmail(user.getEmail())
+           .build();
+   }
+}
+```
+
+#### # client usage
+
+Tuyệt đối không tạo Channel mới cho mỗi request. Spring Boot đã quản lý pool cho chúng ta. Hãy thiết lập Deadline để tránh hiện tượng nghẽn thread.
+
+```java
+@Service
+@Slf4j
+public class UserGrpcClient {
+
+   private final UserServiceGrpc.UserServiceBlockingStub userStub;
+
+   public UserGrpcClient(@GrpcClient("user-service") Channel channel) {
+       this.userStub = UserServiceGrpc.newBlockingStub(channel);
+   }
+
+   public UserResponse getUser(String userId) {
+       try {
+           // LUÔN LUÔN set deadline trong hệ thống phân tán
+           return userStub
+               .withDeadlineAfter(3, TimeUnit.SECONDS)
+               .getUser(GetUserRequest.newBuilder()
+                   .setUserId(userId)
+                   .build());
+       } catch (StatusRuntimeException e) {
+           log.error("gRPC call failed | status={} | desc={}",
+               e.getStatus().getCode(), e.getStatus().getDescription());
+           throw new ServiceCallException("User service unavailable", e);
+       }
+   }
+}
+```
+
+#### # register interceptors
+
+`gRPC interceptor` để xử lý các concerns như `logging, tracing, authentication` một cách tập trung và tái sử dụng.
+
+```java
+@Configuration("grpcInterceptorConfig")
+public class GrpcInterceptorConfig {
+
+   @Bean("grpcTraceIdInterceptor")
+   @GrpcGlobalServerInterceptor
+   public ServerInterceptor traceIdInterceptor() {
+       return new TraceIdServerInterceptor();
+   }
+
+   @Bean("grpcLoggingInterceptor")
+   @GrpcGlobalServerInterceptor
+   public ServerInterceptor loggingInterceptor() {
+       return new LoggingServerInterceptor();
+   }
+
+   @Bean("grpcAuthClientInterceptor")
+   @GrpcGlobalClientInterceptor
+   public ClientInterceptor authClientInterceptor(TokenProvider tokenProvider) {
+       return new AuthClientInterceptor(tokenProvider);
+   }
+}
+```
+
+### # load balancing
+
+#### # vấn đề với grpc + http/2
+
+HTTP/2 multiplexes nhiều requests trên 1 TCP connection. Nếu dùng `L4 load balancer` (TCP level), tất cả requests từ 1 client đi tới cùng 1 backend (vì chỉ có 1 connection).
+
+#### # giải pháp
+
+| Approach                | Cách hoạt động                            | Pros                          | Cons                          |
+| ----------------------- | ----------------------------------------- | ----------------------------- | ----------------------------- |
+| Client-side LB          | Client biết tất cả backends, tự chọn      | Không bottleneck, low latency | Client phức tạp hơn           |
+| L7 Proxy (Envoy, Nginx) | Proxy hiểu HTTP/2, route per-request      | Transparent cho client        | Thêm hop, single point        |
+| Service Mesh (Istio)    | Sidecar proxy per pod                     | Full observability            | Complexity, resource overhead |
+| Look-aside LB           | External LB service cung cấp backend list | Flexible policies             | Thêm dependency               |
+
+```yaml
+# Ví dụ cấu hình Client-side LB với Spring Boot
+grpc:
+  client:
+    user-service:
+      address: 'discovery:///user-service' # Eureka/Consul discovery
+      defaultLoadBalancingPolicy: round_robin
+      negotiationType: plaintext
+```
+
+Policies có sẵn:
+
+- `pick_first`: dùng backend đầu tiên available (default)
+- `round_robin`: xoay vòng giữa các backends
+
+#### # với kubernetes
+
+```yaml
+# Headless service (trả về tất cả pod IPs)
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service-grpc
+spec:
+  clusterIP: None # headless
+  ports:
+    - port: 9090
+      protocol: TCP
+  selector:
+    app: user-service
+```
+
+Client resolve DNS → nhận tất cả pod IPs → round-robin giữa chúng.
+
+### # security
+
+#### # tls (transport layer security)
+
+```yaml
+# Server
+grpc:
+ server:
+   security:
+     enabled: true
+     certificateChain: file:certs/server.crt
+     privateKey: file:certs/server.key
+
+# Client
+grpc:
+ client:
+   user-service:
+     security:
+       authorityOverride: localhost
+       trustCertCollection: file:certs/ca.crt
+```
+
+#### # mutual tls (mtls)
+
+Cả client và server đều verify certificate của nhau:
+
+```yaml
+# Server
+grpc:
+ server:
+   security:
+     enabled: true
+     certificateChain: file:certs/server.crt
+     privateKey: file:certs/server.key
+     clientAuth: REQUIRE
+     trustCertCollection: file:certs/ca.crt
+
+# Client
+grpc:
+ client:
+   user-service:
+     security:
+       clientAuthEnabled: true
+       certificateChain: file:certs/client.crt
+       privateKey: file:certs/client.key
+       trustCertCollection: file:certs/ca.crt
+```
+
+#### # jwt authentication (via interceptor)
+
+```java
+public class JwtAuthServerInterceptor implements ServerInterceptor {
+
+   private static final Metadata.Key<String> AUTH_KEY =
+       Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+   private final JwtValidator jwtValidator;
+
+   @Override
+   public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+           ServerCall<ReqT, RespT> call,
+           Metadata headers,
+           ServerCallHandler<ReqT, RespT> next) {
+
+       String authHeader = headers.get(AUTH_KEY);
+
+       if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+           call.close(Status.UNAUTHENTICATED.withDescription("Missing token"), new Metadata());
+           return new ServerCall.Listener<>() {};
+       }
+
+       String token = authHeader.substring(7);
+       try {
+           Claims claims = jwtValidator.validate(token);
+           Context ctx = Context.current()
+               .withValue(USER_ID_CTX_KEY, claims.getSubject())
+               .withValue(ROLES_CTX_KEY, claims.get("roles", List.class));
+           return Contexts.interceptCall(ctx, call, headers, next);
+       } catch (JwtException e) {
+           call.close(Status.UNAUTHENTICATED.withDescription("Invalid token"), new Metadata());
+           return new ServerCall.Listener<>() {};
+       }
+   }
+}
+```
+
+### # performance optimization
+
+#### # connection management
+
+```java
+// Reuse channel (thread-safe, multiplexed)
+// KHÔNG tạo channel mới cho mỗi request
+ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", 9090)
+   .usePlaintext()
+   .keepAliveTime(30, TimeUnit.SECONDS)
+   .keepAliveTimeout(5, TimeUnit.SECONDS)
+   .maxInboundMessageSize(10 * 1024 * 1024)  // 10MB
+   .build();
+
+// Tạo stub từ channel (lightweight, có thể tạo nhiều)
+UserServiceGrpc.UserServiceBlockingStub stub = UserServiceGrpc.newBlockingStub(channel);
+```
+
+#### # message size
+
+```java
+// Server
+ServerBuilder.forPort(9090)
+   .maxInboundMessageSize(10 * 1024 * 1024)  // 10MB max request
+   .addService(new UserServiceImpl())
+   .build();
+
+// Client
+ManagedChannelBuilder.forAddress("localhost", 9090)
+   .maxInboundMessageSize(10 * 1024 * 1024)  // 10MB max response
+   .build();
+```
+
+Default: 4MB. Tăng khi cần truyền file/data lớn, nhưng prefer streaming cho data > 1MB.
+
+#### # compression
+
+```java
+// Client enable compression
+UserResponse response = userStub
+   .withCompression("gzip")
+   .getUser(request);
+
+// Server accept compression (tự động nếu client gửi compressed)
+// Hoặc force compress response:
+ServerBuilder.forPort(9090)
+   .compressorRegistry(CompressorRegistry.getDefaultInstance())
+   .decompressorRegistry(DecompressorRegistry.getDefaultInstance())
+   .build();
+```
+
+#### # flow control (streaming)
+
+```java
+// Server-side flow control cho streaming
+@Override
+public void listUsers(ListUsersRequest request, StreamObserver<UserResponse> responseObserver) {
+   ServerCallStreamObserver<UserResponse> serverObserver =
+       (ServerCallStreamObserver<UserResponse>) responseObserver;
+
+   // Set callback khi client sẵn sàng nhận thêm
+   serverObserver.setOnReadyHandler(() -> {
+       while (serverObserver.isReady()) {
+           UserResponse next = getNextUser();
+           if (next == null) {
+               serverObserver.onCompleted();
+               return;
+           }
+           serverObserver.onNext(next);
+       }
+       // Client chưa ready → pause, sẽ được gọi lại khi ready
+   });
+}
+```
+
+#### # connection pooling
+
+```yaml
+# grpc-spring-boot-starter tự quản lý channel pool
+grpc:
+  client:
+    user-service:
+      address: 'static://host1:9090,host2:9090,host3:9090'
+      defaultLoadBalancingPolicy: round_robin
+      enableKeepAlive: true
+      keepAliveTime: 30s
+      keepAliveTimeout: 5s
+      keepAliveWithoutCalls: true
+```
+
+### # grpc vs rest: khi nào dùng gì
+
+| Tiêu chí        | gRPC                             | REST                              |
+| --------------- | -------------------------------- | --------------------------------- |
+| Performance     | Nhanh hơn 2-10x (binary, HTTP/2) | Đủ tốt cho hầu hết use cases      |
+| Payload size    | Nhỏ hơn 3-10x (Protobuf)         | JSON verbose nhưng human-readable |
+| Streaming       | Native bidirectional             | WebSocket/SSE (workaround)        |
+| Contract        | Strict (.proto file, code gen)   | Loose (OpenAPI optional)          |
+| Browser support | Cần grpc-web proxy               | Native                            |
+| Debugging       | Khó (binary)                     | Dễ (curl, Postman)                |
+| Tooling         | Ít hơn                           | Rất phong phú                     |
+| Learning curve  | Cao hơn                          | Thấp                              |
+| Backward compat | Tốt (field numbers)              | Phụ thuộc versioning strategy     |
+
+_**Dùng gRPC khi**_:
+
+- Service-to-service communication (internal)
+- High throughput, low latency requirements
+- Streaming data (real-time, large datasets)
+- Polyglot environment (nhiều ngôn ngữ)
+- Strong contract enforcement
+
+_**Dùng REST khi**_:
+
+- Public-facing APIs (browser, mobile, third-party)
+- Simple CRUD operations
+- Team chưa familiar với gRPC
+- Cần debugging dễ dàng
+- Cần caching (HTTP caching headers)
+
+Hybrid approach (phổ biến nhất):
+
+![grpc-hybrid-approach](/assets/img/blog/grpc/grpc-hybrid-approach.png)
+
+### # protobuf best practices
+
+#### # schema evolution (backward/forward compatibility)
+
+```protobuf
+// Version 1
+message UserResponse {
+ string id = 1;
+ string name = 2;
+}
+
+// Version 2 (backward compatible)
+message UserResponse {
+ string id = 1;
+ string name = 2;
+ string email = 3;          // NEW: old clients ignore unknown fields
+ // int32 age = 4;          // REMOVED: just stop using, don't reuse number
+ reserved 4;                // Prevent reuse of field number 4
+ reserved "age";            // Prevent reuse of field name "age"
+}
+```
+
+**Rules:**
+
+- KHÔNG thay đổi field numbers của existing fields
+- KHÔNG thay đổi type của existing fields
+- Dùng `reserved` cho fields đã xóa
+- Thêm fields mới với numbers mới → backward compatible
+- Optional fields (proto3 default) → forward compatible
+
+#### # naming conventions
+
+```protobuf
+// Messages: PascalCase
+message UserProfile {}
+
+// Fields: snake_case
+string user_name = 1;
+int32 page_size = 2;
+
+// Enums: SCREAMING_SNAKE_CASE, prefix với type name
+enum UserStatus {
+ USER_STATUS_UNSPECIFIED = 0;  // always have 0 = unspecified
+ USER_STATUS_ACTIVE = 1;
+}
+
+// Services: PascalCase
+service UserService {}
+
+// RPCs: PascalCase
+rpc GetUser(GetUserRequest) returns (UserResponse);
+
+// Files: snake_case.proto
+// user_service.proto
+```
+
+#### # common patterns
+
+```protobuf
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/empty.proto";
+
+message AuditableEntity {
+ google.protobuf.Timestamp created_at = 1;
+ google.protobuf.Timestamp updated_at = 2;
+ string created_by = 3;
+}
+
+// Wrapper types cho nullable primitives
+message UserPreferences {
+ google.protobuf.Int32Value max_results = 1;  // nullable int
+ google.protobuf.BoolValue notifications_enabled = 2;  // nullable bool
+}
+
+// Empty request/response
+rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+// Pagination pattern
+message PageRequest {
+ int32 page_size = 1;
+ string page_token = 2;
+}
+
+message PageResponse {
+ string next_page_token = 1;
+ int32 total_count = 2;
+}
+
+message ListUsersResponse {
+ repeated UserResponse users = 1;
+ PageResponse page = 2;
+}
+```
+
+### # testing
+
+#### # unit test server
+
+```java
+@ExtendWith(MockitoExtension.class)
+class UserGrpcServiceTest {
+
+   @Mock
+   private UserService userService;
+
+   @InjectMocks
+   private UserGrpcService grpcService;
+
+   @Test
+   void getUser_success() {
+       // Given
+       User user = new User("123", "John", "john@test.com");
+       when(userService.findById("123")).thenReturn(user);
+
+       StreamRecorder<UserResponse> recorder = StreamRecorder.create();
+       GetUserRequest request = GetUserRequest.newBuilder().setUserId("123").build();
+
+       // When
+       grpcService.getUser(request, recorder);
+
+       // Then
+       assertNull(recorder.getError());
+       List<UserResponse> results = recorder.getValues();
+       assertEquals(1, results.size());
+       assertEquals("123", results.get(0).getId());
+       assertEquals("John", results.get(0).getName());
+   }
+
+   @Test
+   void getUser_notFound() {
+       when(userService.findById("999")).thenThrow(new NotFoundException("User not found"));
+
+       StreamRecorder<UserResponse> recorder = StreamRecorder.create();
+       GetUserRequest request = GetUserRequest.newBuilder().setUserId("999").build();
+
+       grpcService.getUser(request, recorder);
+
+       assertNotNull(recorder.getError());
+       assertEquals(Status.NOT_FOUND.getCode(),
+           Status.fromThrowable(recorder.getError()).getCode());
+   }
+}
+```
+
+#### # integration test (in-process server)
+
+```java
+@SpringBootTest
+@DirtiesContext
+class UserGrpcServiceIntegrationTest {
+
+   @GrpcClient("inProcess")
+   private UserServiceGrpc.UserServiceBlockingStub userStub;
+
+   @Test
+   void getUser_integration() {
+       GetUserRequest request = GetUserRequest.newBuilder()
+           .setUserId("123")
+           .build();
+
+       UserResponse response = userStub.getUser(request);
+
+       assertNotNull(response);
+       assertEquals("123", response.getId());
+   }
+
+   @Test
+   void getUser_invalidArgument() {
+       GetUserRequest request = GetUserRequest.newBuilder()
+           .setUserId("")
+           .build();
+
+       StatusRuntimeException exception = assertThrows(
+           StatusRuntimeException.class,
+           () -> userStub.getUser(request)
+       );
+
+       assertEquals(Status.INVALID_ARGUMENT.getCode(), exception.getStatus().getCode());
+   }
+}
+```
+
+### # observability
+
+#### # metrics (micrometer + prometheus)
+
+```java
+// grpc-spring-boot-starter tự expose metrics:
+// grpc_server_requests_received_total{method, status}
+// grpc_server_responses_sent_total{method, status}
+// grpc_server_processing_duration_seconds{method}
+
+// Custom metrics
+@GrpcService
+public class UserGrpcService extends UserServiceGrpc.UserServiceImplBase {
+
+   private final Counter userLookupCounter;
+   private final Timer userLookupTimer;
+
+   public UserGrpcService(MeterRegistry registry) {
+       this.userLookupCounter = registry.counter("grpc.user.lookup.total");
+       this.userLookupTimer = registry.timer("grpc.user.lookup.duration");
+   }
+
+   @Override
+   public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+       userLookupCounter.increment();
+       userLookupTimer.record(() -> {
+           // ... implementation
+       });
+   }
+}
+```
+
+#### # distributed tracing (opentelemetry)
+
+```java
+// Tự động nếu dùng opentelemetry-instrumentation-grpc
+// Trace context propagate qua gRPC metadata headers
+
+// Manual span creation
+@Override
+public void getUser(GetUserRequest request, StreamObserver<UserResponse> responseObserver) {
+   Span span = tracer.spanBuilder("UserService.getUser")
+       .setAttribute("user.id", request.getUserId())
+       .startSpan();
+
+   try (Scope scope = span.makeCurrent()) {
+       // ... implementation
+       span.setStatus(StatusCode.OK);
+   } catch (Exception e) {
+       span.setStatus(StatusCode.ERROR, e.getMessage());
+       span.recordException(e);
+       throw e;
+   } finally {
+       span.end();
+   }
+}
+```
+
+### # production checklist
+
+- [ ] TLS enabled (hoặc mTLS cho internal services)
+- [ ] Deadlines set trên mọi client calls
+- [ ] Retry policy configured (với backoff)
+- [ ] Circuit breaker cho external gRPC calls
+- [ ] Max message size configured (không để default 4MB nếu cần lớn hơn)
+- [ ] Keep-alive configured (tránh idle connection bị kill bởi LB)
+- [ ] Health check service implemented (`grpc.health.v1.Health`)
+- [ ] Graceful shutdown (drain connections trước khi stop)
+- [ ] Interceptors cho logging, tracing, auth
+- [ ] Load balancing strategy phù hợp
+- [ ] Protobuf schema versioning (reserved fields)
+- [ ] Monitoring: latency, error rate, throughput per method
+- [ ] Connection pooling / channel reuse (không tạo channel mới mỗi request)
+
+### # common pitfalls
+
+| Pitfall                   | Vấn đề                               | Fix                                           |
+| ------------------------- | ------------------------------------ | --------------------------------------------- |
+| Tạo channel mỗi request   | Connection overhead, resource leak   | Reuse channel (thread-safe)                   |
+| Không set deadline        | Request hang forever                 | Luôn set deadline                             |
+| Blocking trong async stub | Deadlock                             | Dùng blocking stub hoặc proper async handling |
+| Large unary messages      | Memory pressure, timeout             | Dùng streaming cho data > 1MB                 |
+| Không handle UNAVAILABLE  | Client crash khi server restart      | Retry với exponential backoff                 |
+| Reuse field numbers       | Data corruption                      | Dùng `reserved`                               |
+| L4 LB cho gRPC            | Tất cả traffic đi 1 backend          | Dùng L7 LB hoặc client-side LB                |
+| Không graceful shutdown   | In-flight requests bị drop           | `server.shutdown()` + `awaitTermination()`    |
+| Ignore flow control       | OOM khi streaming nhanh hơn consumer | Check `isReady()` trước khi send              |
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

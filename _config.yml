@@ -23,7 +23,7 @@ components:
     # share
     # weibo,qq,wechat,douban,qzone,linkedin,facebook,twitter
     share:
-        enabled: true
+        enabled: false
         hide-platforms: qq,facebook
     # Busuanzi visit statistics
     busuanzi:

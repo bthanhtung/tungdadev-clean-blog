@@ -1,0 +1,710 @@
+---
+layout: post
+title: "redis"
+date: 2025-03-01 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, redis, best-practices, vietnamese]
+---
+
+Redis (Remote Dictionary Server) thường bị đóng khung ở khái niệm "bộ nhớ đệm" (cache). Tuy nhiên, dưới góc nhìn của một hệ thống chịu tải cao, Redis là một cỗ máy xử lý cấu trúc dữ liệu trên RAM với độ trễ sub-millisecond, đóng vai trò nền tảng cho hàng loạt pattern kiến trúc từ Rate Limiting, Message Queue cho đến Event Sourcing.
+
+Bài viết này sẽ mổ xẻ Redis từ bản chất kiến trúc, nghệ thuật tối giản bộ nhớ, cho đến việc ứng dụng nó vào các mô hình phân tán phức tạp.
+
+### # bản chất
+
+Sức mạnh của Redis nằm ở thiết kế cơ bản: In-memory và Single-threaded.
+
+Toàn bộ dữ liệu nằm trên RAM, giúp các thao tác đọc/ghi đạt độ trễ cực thấp. Việc sử dụng một luồng duy nhất (single-threaded) cho việc thực thi lệnh (command execution) giúp Redis loại bỏ hoàn toàn chi phí chuyển đổi ngữ cảnh (context switching) và các rủi ro về race condition mà không cần sử dụng cơ chế khóa (lock) phức tạp. Các thao tác đều mặc định đảm bảo tính nguyên tử (atomic).
+
+Để xử lý hàng chục nghìn kết nối đồng thời trên một luồng, Redis tận dụng cơ chế I/O Multiplexing (thông qua epoll/kqueue), cho phép lắng nghe và phân phối các luồng dữ liệu mạng một cách tối ưu nhất.
+
+### # data structures
+
+Redis không chỉ là key-value đơn giản. Nó hỗ trợ nhiều cấu trúc dữ liệu native:
+
+| Structure   | Ví dụ                             | Use case                      |
+| ----------- | --------------------------------- | ----------------------------- |
+| String      | `SET user:1 "John"`               | Cache, counter, session       |
+| Hash        | `HSET user:1 name "John" age 30`  | Object storage                |
+| List        | `LPUSH queue task1`               | Message queue, timeline       |
+| Set         | `SADD tags "java" "redis"`        | Unique collections, tagging   |
+| Sorted Set  | `ZADD leaderboard 100 "player1"`  | Ranking, rate limiting        |
+| Stream      | `XADD events * key value`         | Event sourcing, log           |
+| HyperLogLog | `PFADD visitors "user1"`          | Counting unique (approximate) |
+| Bitmap      | `SETBIT active:20240101 userId 1` | Flags, daily active users     |
+| Geospatial  | `GEOADD stores lon lat name`      | Location-based queries        |
+
+### # cách xử lý request
+
+![request-redis](/assets/img/blog/redis/request-redis.png)
+
+Single-threaded nghĩa là mỗi command được xử lý tuần tự, atomic by default. Không có 2 command nào chạy đồng thời trên cùng data.
+
+### # persistence (tuỳ chọn)
+
+Redis có 2 cơ chế ghi xuống disk:
+
+- **RDB (snapshotting):** chụp toàn bộ dataset theo interval (vd: mỗi 5 phút). Nhanh khi restore, nhưng có thể mất data giữa 2 snapshot.
+- **AOF (Append Only File):** ghi log mọi write operation. An toàn hơn (có thể config fsync mỗi giây), nhưng file lớn hơn và restore chậm hơn.
+
+Có thể dùng cả 2 cùng lúc. Hoặc tắt hết nếu chỉ dùng làm cache thuần.
+
+### # expiration (TTL)
+
+```
+SET session:abc123 "data" EX 3600   # tự xóa sau 1 giờ
+```
+
+Redis dùng 2 chiến lược xóa key hết hạn:
+
+- **Lazy:** kiểm tra khi client truy cập key
+- **Active:** background task random sample keys có TTL, xóa những key đã expired
+
+### # replication & high availability
+
+- **Master-Replica:** replica async copy data từ master. Read scale bằng cách đọc từ replica.
+- **Redis Sentinel:** monitor master, tự động failover khi master chết, promote replica lên master.
+- **Redis Cluster:** sharding data qua 16384 hash slots, phân tán trên nhiều node. Scale cả read lẫn write.
+
+### # pub/sub & streams
+
+- **Pub/Sub:** fire-and-forget messaging. Subscriber không nhận được message nếu lúc đó offline.
+- **Streams:** persistent message log (giống Kafka lite). Consumer groups, acknowledgment, replay từ bất kỳ offset nào.
+
+### # tại sao nhanh
+
+- Data trong RAM (không disk I/O cho read/write)
+- Single-threaded (không context switch, không lock)
+- I/O multiplexing (epoll/kqueue xử lý hàng nghìn connections trên 1 thread)
+- Efficient data structures (ziplist, intset, quicklist cho small data)
+- RESP protocol đơn giản, parse nhanh
+
+### # limitations
+
+- Bị giới hạn bởi RAM (dataset phải fit trong memory)
+- Single-threaded cho commands (CPU-bound operations như Lua script phức tạp sẽ block)
+- Eventual consistency ở replica (async replication có thể mất data khi master crash)
+- Không có query language phức tạp (không JOIN, không aggregate như SQL)
+
+### # memory optimization
+
+Bộ nhớ RAM đắt đỏ. Việc áp dụng tư duy tinh gọn, lược bỏ những byte dư thừa trong dữ liệu không chỉ tiết kiệm chi phí hạ tầng mà còn giữ cho hệ thống hoạt động ổn định, tránh phân mảnh.
+
+#### # kỹ thuật ziplist
+
+Cùng một khối lượng dữ liệu, cách tổ chức sẽ quyết định mức độ hao phí. Việc lưu 1 triệu user profiles bằng String (mỗi field một key) sẽ tạo ra overhead khổng lồ cho metadata. Thay vào đó, sử dụng Hash giúp Redis tự động kích hoạt Ziplist encoding (chuỗi bộ nhớ liên tục, nhỏ gọn), tiết kiệm đến 5-10 lần dung lượng.
+Ngưỡng mặc định để duy trì sự tinh gọn này:
+
+- hash-max-ziplist-entries 128
+- hash-max-ziplist-value 64
+
+#### # kỹ thuật hash bucketing
+
+Khi số lượng key vượt quá hàng triệu, hãy gom nhóm chúng. Phân tách ID để tạo thành các bucket (ví dụ: chia ID cho 1000).
+Việc này giảm thiểu số lượng top-level keys, nén hàng nghìn keys vào một Hash nhỏ, duy trì cấu trúc Ziplist và cắt giảm đến 80% RAM sử dụng.
+Nếu có 10M keys dạng `user:{id}`, nhóm lại thành hash buckets:
+
+```
+# Thay vì 10M keys:
+SET user:1234567 "data"
+
+# Nhóm theo bucket (chia id cho 1000):
+HSET user_bucket:1234 567 "data"
+# → Giảm từ 10M keys xuống 10K hash keys, mỗi hash ~1000 entries (vẫn ziplist nếu <= 128)
+# → Tiết kiệm 60-80% memory
+```
+
+Lưu ý: nếu bucket > `hash-max-ziplist-entries`, Redis chuyển sang hashtable encoding → mất lợi thế. Cần tune bucket size phù hợp.
+
+#### # key naming ngắn gọn
+
+Mỗi byte trong key name đều tốn RAM × số lượng keys:
+
+```
+# 1M keys × 30 chars = 30MB chỉ cho key names
+session:user:authentication:token:abc123
+
+# 1M keys × 10 chars = 10MB
+s:u:t:abc123
+```
+
+Trade-off: readability vs memory. Với dataset lớn (>1M keys), key ngắn có ý nghĩa.
+
+#### # ttl mọi thứ có thể
+
+```
+SET cache:product:123 "data" EX 3600    # expire sau 1h
+```
+
+Không set TTL = memory leak chậm. Dùng `redis-cli --bigkeys` và `MEMORY USAGE key` để audit.
+
+#### # compression ở application layer
+
+Đừng đẩy trực tiếp cục JSON nguyên bản vào Redis nếu nó lớn hơn 1KB. Áp dụng các thuật toán nén như Snappy hoặc LZ4 tại tầng ứng dụng (Java/Go) trước khi ghi.
+
+```java
+// Nén payload bằng Snappy trước khi đẩy vào Redis
+byte[] compressedPayload = Snappy.compress(jsonBytes);
+redisTemplate.opsForValue().set(key, compressedPayload, Duration.ofHours(1));
+
+// Quá trình đọc và giải nén diễn ra trong suốt với business logic
+byte[] rawBytes = redisTemplate.opsForValue().get(key);
+byte[] decompressedPayload = Snappy.uncompress(rawBytes);
+```
+
+Hiệu quả với value > 1KB. JSON compress tốt (50-70% reduction).
+
+Benchmark compression algorithms:
+| Algorithm | Ratio | Speed | Khi nào dùng |
+|-----------|-------|-------|--------------|
+| Snappy | ~50% | Rất nhanh | Default choice, latency-sensitive |
+| LZ4 | ~55% | Nhanh | Balance tốt |
+| GZIP | ~70% | Chậm | Batch jobs, không real-time |
+
+#### # eviction policies
+
+Trong một kiến trúc Clean Architecture, Redis thường nằm ở tầng Infrastructure, đóng vai trò hỗ trợ cho các Operations phức tạp ở tầng Application.
+
+Khi Redis đạt `maxmemory`, nó cần evict keys:
+
+| Policy            | Hành vi                  | Khi nào dùng              |
+| ----------------- | ------------------------ | ------------------------- |
+| `noeviction`      | Trả error khi full       | Data không được mất       |
+| `allkeys-lru`     | Xóa key ít dùng nhất     | Cache thuần               |
+| `volatile-lru`    | LRU chỉ trên keys có TTL | Mix cache + persistent    |
+| `allkeys-lfu`     | Xóa key ít frequent nhất | Hot/cold data rõ ràng     |
+| `volatile-ttl`    | Xóa key sắp expire nhất  | TTL-based cache           |
+| `volatile-random` | Random xóa keys có TTL   | Không biết access pattern |
+| `allkeys-random`  | Random xóa bất kỳ key    | Uniform access pattern    |
+
+**Recommendation:** `allkeys-lfu` cho cache workload, `noeviction` cho data store.
+
+#### # shared/embedded strings
+
+Redis intern các integer từ 0-9999 (shared objects). Nếu value là số nguyên nhỏ, nó không tốn thêm memory cho value.
+
+```
+SET counter 42    # value "42" dùng shared object, gần như 0 bytes cho value
+SET name "John"   # value "John" tốn memory riêng
+```
+
+#### # memory analysis tools
+
+```bash
+redis-cli INFO memory              # tổng quan memory usage
+redis-cli --bigkeys                # tìm keys lớn nhất (sample-based)
+redis-cli --memkeys                # sample memory per key
+redis-cli MEMORY USAGE mykey       # memory 1 key cụ thể (bytes)
+redis-cli MEMORY DOCTOR            # diagnostic suggestions
+redis-cli DBSIZE                   # tổng số keys
+redis-cli INFO keyspace            # keys per database + expires
+
+# Object encoding check
+redis-cli OBJECT ENCODING mykey    # ziplist? hashtable? embstr? int?
+```
+
+#### # memory fragmentation
+
+```bash
+# Check fragmentation ratio
+redis-cli INFO memory | grep mem_fragmentation_ratio
+```
+
+- Ratio > 1.5: fragmentation cao, Redis dùng nhiều memory hơn cần thiết
+- Ratio < 1.0: Redis đang swap (rất tệ cho performance)
+
+Fix:
+
+```
+# Enable active defragmentation (Redis 4.0+)
+CONFIG SET activedefrag yes
+CONFIG SET active-defrag-ignore-bytes 100mb
+CONFIG SET active-defrag-threshold-lower 10
+```
+
+Hoặc restart Redis (RDB load sẽ compact memory).
+
+### # use case patterns
+
+#### # cache-aside (phổ biến nhất)
+
+```
+Read:  App → Redis (hit?) → yes → return
+                          → no  → query DB → write Redis → return
+
+Write: App → update DB → delete Redis key (invalidate)
+```
+
+```java
+public User getUser(String id) {
+   String cached = redis.opsForValue().get("user:" + id);
+   if (cached != null) return deserialize(cached);
+
+   User user = db.findById(id);
+   redis.opsForValue().set("user:" + id, serialize(user), Duration.ofMinutes(30));
+   return user;
+}
+
+public void updateUser(String id, User user) {
+   db.save(user);
+   redis.delete("user:" + id);  // invalidate, không update
+}
+```
+
+**Tại sao delete thay vì update cache?**
+
+- 2 concurrent writes: write A update DB → write B update DB → write B update cache → write A update cache → cache stale (A's data, nhưng DB có B's data)
+- Delete an toàn hơn: worst case là cache miss, query lại DB
+
+**Cache stampede prevention:**
+
+```java
+// Dùng distributed lock khi cache miss để tránh thundering herd
+public User getUserSafe(String id) {
+   String cached = redis.opsForValue().get("user:" + id);
+   if (cached != null) return deserialize(cached);
+
+   String lockKey = "lock:user:" + id;
+   boolean locked = redis.opsForValue().setIfAbsent(lockKey, "1", Duration.ofSeconds(5));
+
+   if (locked) {
+       try {
+           User user = db.findById(id);
+           redis.opsForValue().set("user:" + id, serialize(user), Duration.ofMinutes(30));
+           return user;
+       } finally {
+           redis.delete(lockKey);
+       }
+   } else {
+       // Wait and retry
+       Thread.sleep(50);
+       return getUserSafe(id);
+   }
+}
+```
+
+#### # write-through cache
+
+```
+Write: App → write Redis → Redis async write DB
+Read:  App → Redis (always hit)
+```
+
+Ít dùng với Redis thuần (thường cần middleware). Phù hợp khi read >> write.
+
+#### # write-behind (write-back)
+
+```
+Write: App → write Redis → return immediately
+      Background: Redis → batch write DB (async)
+```
+
+Tăng write throughput, nhưng risk mất data nếu Redis crash trước khi flush.
+
+#### # rate limiting
+
+Bảo vệ API khỏi các đợt tấn công hoặc lạm dụng. Thay vì Fixed Window dễ bị lọt tại thời điểm chuyển giao giây, Sliding Window sử dụng Sorted Set để đếm chính xác số lượng request trong một khung thời gian lùi (ví dụ 1000ms tính từ hiện tại).
+
+##### # fixed window
+
+```java
+public boolean isAllowed(String userId, int limit, int windowSeconds) {
+   String key = "rate:" + userId + ":" + (System.currentTimeMillis() / (windowSeconds * 1000));
+   Long count = redis.opsForValue().increment(key);
+   if (count == 1) {
+       redis.expire(key, Duration.ofSeconds(windowSeconds));
+   }
+   return count <= limit;
+}
+```
+
+Nhược điểm: boundary problem (burst ở cuối window + đầu window tiếp = 2x limit).
+
+##### # sliding window (chính xác hơn)
+
+```java
+public boolean isAllowed(String userId, int limit, int windowMs) {
+   String key = "rate:" + userId;
+   long now = System.currentTimeMillis();
+   long windowStart = now - windowMs;
+
+   redis.opsForZSet().removeRangeByScore(key, 0, windowStart);
+   Long count = redis.opsForZSet().zCard(key);
+
+   if (count < limit) {
+       redis.opsForZSet().add(key, UUID.randomUUID().toString(), now);
+       redis.expire(key, Duration.ofMillis(windowMs + 1000));
+       return true;
+   }
+   return false;
+}
+```
+
+##### # token bucket (lua script, atomic)
+
+```lua
+-- KEYS[1] = bucket key
+-- ARGV[1] = max tokens, ARGV[2] = refill rate (tokens/sec), ARGV[3] = now (ms)
+local key = KEYS[1]
+local max_tokens = tonumber(ARGV[1])
+local refill_rate = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+
+local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
+local tokens = tonumber(bucket[1]) or max_tokens
+local last_refill = tonumber(bucket[2]) or now
+
+-- Refill
+local elapsed = (now - last_refill) / 1000
+local new_tokens = math.min(max_tokens, tokens + elapsed * refill_rate)
+
+if new_tokens >= 1 then
+   redis.call('HSET', key, 'tokens', new_tokens - 1, 'last_refill', now)
+   redis.call('EXPIRE', key, math.ceil(max_tokens / refill_rate) + 1)
+   return 1  -- allowed
+end
+
+redis.call('HSET', key, 'tokens', new_tokens, 'last_refill', now)
+return 0  -- denied
+```
+
+### # distributed lock
+
+#### # simple lock (set nx ex)
+
+```java
+public boolean acquireLock(String resource, String owner, int ttlSeconds) {
+   Boolean acquired = redis.opsForValue()
+       .setIfAbsent("lock:" + resource, owner, Duration.ofSeconds(ttlSeconds));
+   return Boolean.TRUE.equals(acquired);
+}
+
+public boolean releaseLock(String resource, String owner) {
+   // Lua script đảm bảo chỉ owner mới unlock được (atomic)
+   String script = """
+       if redis.call('get', KEYS[1]) == ARGV[1] then
+           return redis.call('del', KEYS[1])
+       end
+       return 0
+   """;
+   Long result = redis.execute(
+       RedisScript.of(script, Long.class),
+       List.of("lock:" + resource),
+       owner
+   );
+   return result != null && result == 1;
+}
+```
+
+#### # redlock (multi-node, production-grade)
+
+```java
+// Dùng Redisson library
+RLock lock = redisson.getLock("resource:123");
+try {
+   // Wait tối đa 10s để acquire, auto-release sau 30s
+   if (lock.tryLock(10, 30, TimeUnit.SECONDS)) {
+       // critical section
+   }
+} finally {
+   lock.unlock();
+}
+```
+
+**Khi nào dùng:**
+
+- Scheduled tasks (Shedlock)
+- Prevent duplicate processing
+- Resource coordination giữa multiple instances
+
+### # leaderboard / ranking
+
+```java
+// Add/update score
+redis.opsForZSet().add("leaderboard:weekly", "player_a", 1500);
+redis.opsForZSet().add("leaderboard:weekly", "player_b", 2300);
+
+// Increment score
+redis.opsForZSet().incrementScore("leaderboard:weekly", "player_a", 50);
+
+// Top 10 (descending)
+Set<ZSetOperations.TypedTuple<String>> top10 =
+   redis.opsForZSet().reverseRangeWithScores("leaderboard:weekly", 0, 9);
+
+// Rank of specific player (0-based)
+Long rank = redis.opsForZSet().reverseRank("leaderboard:weekly", "player_a");
+
+// Score of specific player
+Double score = redis.opsForZSet().score("leaderboard:weekly", "player_a");
+
+// Players ranked 50-60
+Set<String> page = redis.opsForZSet().reverseRange("leaderboard:weekly", 50, 60);
+```
+
+O(log N) cho mọi operation. Scale tốt đến hàng triệu entries.
+
+### # session store
+
+```java
+// Lưu session
+redis.opsForHash().putAll("session:" + sessionId, Map.of(
+   "userId", "123",
+   "role", "admin",
+   "lastAccess", String.valueOf(System.currentTimeMillis())
+));
+redis.expire("session:" + sessionId, Duration.ofMinutes(30));
+
+// Mỗi request: refresh TTL (sliding expiration)
+redis.expire("session:" + sessionId, Duration.ofMinutes(30));
+
+// Đọc session
+Map<Object, Object> session = redis.opsForHash().entries("session:" + sessionId);
+
+// Logout: xóa session
+redis.delete("session:" + sessionId);
+```
+
+Ưu điểm: stateless app servers, session survive restart, dễ scale horizontally.
+
+### # pub/sub cho real-time notifications
+
+```java
+// Publisher
+redis.convertAndSend("notifications:user:123", jsonMessage);
+
+// Subscriber (Spring)
+@Component
+public class NotificationListener implements MessageListener {
+   @Override
+   public void onMessage(Message message, byte[] pattern) {
+       String payload = new String(message.getBody());
+       // Push to WebSocket
+       websocketService.send(extractUserId(message.getChannel()), payload);
+   }
+}
+
+// Config
+@Bean
+RedisMessageListenerContainer container(RedisConnectionFactory factory) {
+   RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+   container.setConnectionFactory(factory);
+   container.addMessageListener(listener, new PatternTopic("notifications:*"));
+   return container;
+}
+```
+
+**Lưu ý:** message mất nếu subscriber offline. Dùng Streams nếu cần durability.
+
+### # job queue với streams
+
+```java
+// Producer: add job
+redis.opsForStream().add("jobs:email", Map.of(
+   "to", "user@example.com",
+   "subject", "Welcome",
+   "template", "onboarding"
+));
+
+// Consumer group setup (chạy 1 lần)
+redis.opsForStream().createGroup("jobs:email", "email-workers");
+
+// Consumer: read and process
+List<MapRecord<String, Object, Object>> messages = redis.opsForStream().read(
+   Consumer.from("email-workers", "worker-1"),
+   StreamReadOptions.empty().count(10).block(Duration.ofSeconds(5)),
+   StreamOffset.create("jobs:email", ReadOffset.lastConsumed())
+);
+
+for (MapRecord<String, Object, Object> msg : messages) {
+   try {
+       processEmail(msg.getValue());
+       // Acknowledge
+       redis.opsForStream().acknowledge("jobs:email", "email-workers", msg.getId());
+   } catch (Exception e) {
+       // Message stays in PEL (Pending Entries List), sẽ được retry
+       log.error("Failed to process: {}", msg.getId(), e);
+   }
+}
+
+// Check pending (failed/timeout messages)
+PendingMessages pending = redis.opsForStream().pending("jobs:email", "email-workers");
+```
+
+**Ưu điểm so với List-based queue:**
+
+- Consumer groups (multiple consumers, load balancing)
+- Acknowledgment (at-least-once delivery)
+- Replay từ bất kỳ position
+- Pending entries tracking (auto-retry)
+
+### # bloom filter (kiểm tra tồn tại)
+
+```
+# Redis Stack / RedisBloom module
+BF.RESERVE registered_emails 0.001 1000000   # 0.1% false positive, 1M items
+BF.ADD registered_emails "john@x.com"
+BF.EXISTS registered_emails "john@x.com"     # → 1 (có thể tồn tại)
+BF.EXISTS registered_emails "new@x.com"      # → 0 (chắc chắn chưa có)
+```
+
+**Use cases:**
+
+- Check email/username đã tồn tại trước khi query DB
+- URL deduplication trong crawler
+- Spam detection
+- Cache penetration prevention (filter invalid keys trước khi hit DB)
+
+Memory: ~1.2MB cho 1M items với 1% false positive rate.
+
+### # geospatial
+
+```java
+// Add locations
+redis.opsForGeo().add("stores", new Point(106.6297, 10.8231), "store_hcm");
+redis.opsForGeo().add("stores", new Point(105.8342, 21.0278), "store_hn");
+
+// Tìm stores trong bán kính 5km từ user location
+GeoResults<RedisGeoCommands.GeoLocation<String>> results = redis.opsForGeo().radius(
+   "stores",
+   new Circle(new Point(106.63, 10.82), new Distance(5, Metrics.KILOMETERS)),
+   RedisGeoCommands.GeoRadiusCommandArgs.newGeoRadiusArgs()
+       .includeDistance()
+       .sortAscending()
+       .limit(10)
+);
+
+// Khoảng cách giữa 2 points
+Distance dist = redis.opsForGeo().distance("stores", "store_hcm", "store_hn", Metrics.KILOMETERS);
+```
+
+### # counting unique (hyperloglog)
+
+```java
+// Count unique visitors (approximate, ±0.81% error)
+redis.opsForHyperLogLog().add("visitors:2024-01-15", "user_1", "user_2", "user_3");
+redis.opsForHyperLogLog().add("visitors:2024-01-15", "user_1"); // duplicate, không tăng
+
+Long count = redis.opsForHyperLogLog().size("visitors:2024-01-15"); // ~3
+
+// Merge multiple days
+redis.opsForHyperLogLog().union("visitors:week",
+   "visitors:2024-01-15", "visitors:2024-01-16", "visitors:2024-01-17");
+```
+
+**Memory:** 12KB cố định bất kể số lượng elements (có thể count billions).
+
+### # bitmap (daily active users)
+
+```java
+// Mark user active today
+int userId = 12345;
+redis.opsForValue().setBit("dau:2024-01-15", userId, true);
+
+// Check if user was active
+Boolean active = redis.opsForValue().getBit("dau:2024-01-15", userId);
+
+// Count total active users today
+// (dùng BITCOUNT command)
+Long activeCount = redis.execute((RedisCallback<Long>) conn ->
+   conn.bitCount("dau:2024-01-15".getBytes()));
+
+// Users active cả 3 ngày (AND operation)
+redis.execute((RedisCallback<Long>) conn ->
+   conn.bitOp(BitOperation.AND, "dau:3days".getBytes(),
+       "dau:2024-01-15".getBytes(),
+       "dau:2024-01-16".getBytes(),
+       "dau:2024-01-17".getBytes()));
+```
+
+**Memory:** 1M users = 125KB per day. Rất compact.
+
+### # distributed counter
+
+```java
+// Atomic increment
+Long views = redis.opsForValue().increment("article:123:views");
+
+// Increment by N
+redis.opsForValue().increment("stats:downloads", 5);
+
+// Hash-based counters (multiple metrics per entity)
+redis.opsForHash().increment("article:123", "views", 1);
+redis.opsForHash().increment("article:123", "likes", 1);
+redis.opsForHash().increment("article:123", "shares", 1);
+
+// Batch flush to DB periodically (không write DB mỗi increment)
+// Scheduled job mỗi 5 phút: read counters → batch update DB → reset counters
+```
+
+### # circuit breaker state
+
+```java
+// Track failures cho external service
+public boolean isCircuitOpen(String service) {
+   String key = "circuit:" + service;
+   String state = redis.opsForValue().get(key + ":state");
+
+   if ("open".equals(state)) {
+       // Check if cooldown passed
+       Long ttl = redis.getExpire(key + ":state");
+       return ttl != null && ttl > 0;
+   }
+   return false;
+}
+
+public void recordFailure(String service, int threshold, int cooldownSeconds) {
+   String key = "circuit:" + service + ":failures";
+   Long failures = redis.opsForValue().increment(key);
+   redis.expire(key, Duration.ofMinutes(1)); // reset window
+
+   if (failures >= threshold) {
+       redis.opsForValue().set("circuit:" + service + ":state", "open",
+           Duration.ofSeconds(cooldownSeconds));
+   }
+}
+```
+
+### tổng kết
+
+| Bài toán                | Structure           | Pattern                       |
+| ----------------------- | ------------------- | ----------------------------- |
+| Cache DB queries        | String/Hash         | Cache-Aside                   |
+| User session            | Hash + TTL          | Session Store                 |
+| API rate limit          | Sorted Set / String | Sliding Window / Token Bucket |
+| Job queue               | Stream (hoặc List)  | Consumer Group / BRPOP        |
+| Real-time notifications | Pub/Sub / Stream    | Fire-and-forget / Durable     |
+| Ranking/Leaderboard     | Sorted Set          | ZADD + ZREVRANGE              |
+| Mutual exclusion        | String + NX         | Distributed Lock              |
+| Unique existence check  | Bloom Filter        | BF.EXISTS                     |
+| Nearby search           | Geo                 | GEOSEARCH                     |
+| Count unique visitors   | HyperLogLog         | PFADD + PFCOUNT               |
+| Daily active users      | Bitmap              | SETBIT + BITCOUNT             |
+| Atomic counters         | String / Hash       | INCR / HINCRBY                |
+| Circuit breaker         | String + TTL        | State machine                 |
+| Feature flags           | Hash                | HGET/HSET                     |
+| Autocomplete            | Sorted Set          | ZRANGEBYLEX                   |
+
+### # best practices
+
+#### # do's
+
+- Luôn set TTL cho cache keys
+- Dùng pipeline/MULTI cho batch operations (giảm round-trips)
+- Monitor memory với `INFO memory` regularly
+- Dùng Lua scripts cho complex atomic operations
+- Prefix keys theo domain: `user:`, `session:`, `cache:`
+- Set `maxmemory` và eviction policy phù hợp
+
+#### # don'ts
+
+- Không lưu data > 100MB trong 1 key (block single thread)
+- Không dùng `KEYS *` trong production (O(N), block)
+- Không rely vào Redis như primary data store (trừ khi có persistence + replication)
+- Không dùng Pub/Sub cho critical messages (no delivery guarantee)
+- Không để Redis accessible từ public internet (không có auth mặc định)
+
+Redis là một công cụ sắc bén. Khi được thiết kế đúng chuẩn, nó sẽ là trái tim bơm máu cho toàn bộ hệ thống backend, giữ nhịp đập ổn định bất chấp mọi áp lực tải trọng.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

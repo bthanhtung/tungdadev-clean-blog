@@ -1,0 +1,223 @@
+---
+layout: post
+title: "acid in sql"
+date: 2026-03-09 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, database, best-practices, vietnamese]
+---
+
+Là một kỹ sư phần mềm, chắc hẳn chúng ta đều không ít lần phải "đau đầu" với những bug liên quan đến dữ liệu bị sai lệch,
+mất mát hoặc deadlock khi hệ thống có nhiều người dùng cùng lúc. Nguyên nhân cốt lõi thường nằm ở việc quản lý `Transaction` chưa được chuẩn.
+
+Bài viết này là cuốn cẩm nang mình note lại, tập trung vào `ACID, Isolation Levels, Locking` và cách áp dụng với Spring Data JPA.
+Hy vọng nó sẽ giúp các bạn tự tin hơn khi làm việc với `Database`!
+
+### # acid properties
+
+Để đảm bảo tính toàn vẹn của dữ liệu, một Database Transaction cần tuân thủ 4 tính chất (ACID):
+
+#### # atomicity - tính nguyên tử ~~ "cùng sống hoặc cùng chết"
+
+Transaction là một khối thống nhất "all-or-nothing". Tất cả các thao tác (operations) bên trong phải thành công toàn bộ,
+nếu có bất kỳ lỗi nào, mọi thứ phải được hoàn tác (rollback) về trạng thái ban đầu.
+
+```sql
+BEGIN;
+ UPDATE accounts SET balance = balance - 1000 WHERE id = 'A';
+ UPDATE accounts SET balance = balance + 1000 WHERE id = 'B';
+COMMIT;
+-- Nếu lệnh thứ 2 thất bại, lệnh thứ 1 lập tức rollback để tránh việc A bị trừ tiền oan.
+```
+
+#### # consistency - tính nhất quán ~~ "trước sau như một"
+
+Transaction đưa database từ một trạng thái hợp lệ này sang một trạng thái hợp lệ khác. Khi kết thúc transaction,
+mọi ràng buộc (`Constraints, FK, UNIQUE, NOT NULL...`) hay business rules đều phải được thỏa mãn.
+
+```sql
+-- Ràng buộc: balance >= 0
+BEGIN;
+ UPDATE accounts SET balance = balance - 5000 WHERE id = 'A';
+ -- Nếu A chỉ có 3000 -> Vi phạm CHECK constraint -> Transaction rollback ngay.
+COMMIT;
+```
+
+#### # isolation - tính cách ly - "việc ai nấy làm"
+
+Khi có nhiều `transactions` chạy song song `(concurrent)`, chúng sẽ không nhìn thấy trạng thái trung gian của nhau.
+Mức độ cách ly `(Isolation Level)` ta chọn sẽ là sự đánh đổi (trade-off) giữa tính an toàn của dữ liệu và hiệu suất hệ thống.
+
+#### # durability - tính bền vững - "đã chốt là ghi sổ"
+
+Một khi transaction đã `COMMIT` thành công, dữ liệu được đảm bảo an toàn tuyệt đối ngay cả khi hệ thống bị sập (crash) hay mất điện.
+Các Database thường dùng cơ chế `WAL (Write-Ahead Logging)` để bảo kê việc này.
+
+### # isolation levels: kiểm soát sự song song
+
+Khi các `transactions` chạy song song, hệ thống dễ gặp phải các "hiện tượng lạ" `(Read Anomalies)` nếu không được cách ly tốt.
+
+Các hiện tượng đọc bất thường:
+
+- **Dirty Read**: Đọc phải dữ liệu chưa được commit của một transaction khác (cực kỳ rủi ro vì transaction kia có thể rollback).
+- **Non-Repeatable Read**: Trong cùng một transaction, đọc cùng một dòng (row) 2 lần lại ra 2 kết quả khác nhau (do transaction khác xen vào update).
+- **Phantom Read**: Cùng một câu query (ví dụ: COUNT), nhưng 2 lần chạy cho ra số lượng kết quả khác nhau (do transaction khác vừa insert/delete thêm data).
+- **Serialization Anomaly**: Kết quả khi chạy song song không khớp với kết quả khi chạy nối tiếp nhau.
+
+#### # isolation levels (tham chiếu postgresql)
+
+| Level                    | Dirty Read                          | Non-Repeatable Read | Phantom Read | Serialization Anomaly |
+| ------------------------ | ----------------------------------- | ------------------- | ------------ | --------------------- |
+| READ UNCOMMITTED\*       | Không (PG treats as READ COMMITTED) | Có thể              | Có thể       | Có thể                |
+| READ COMMITTED (default) | Không                               | Có thể              | Có thể       | Có thể                |
+| REPEATABLE READ          | Không                               | Không               | Không (PG)   | Có thể                |
+| SERIALIZABLE             | Không                               | Không               | Không        | Không                 |
+
+Lưu ý: `PostgreSQL` không thực sự implement `READ UNCOMMITTED`. Nếu ta cấu hình mức này, nó sẽ tự động chạy như `READ COMMITTED`.
+
+Giờ ta đi sâu vào từng mức độ cách ly phổ biến:
+
+#### # read committed (cân bằng & phổ biến nhất)
+
+- Đặc điểm: Mỗi câu query sẽ nhìn thấy một "snapshot" dữ liệu tại thời điểm câu lệnh đó bắt đầu chạy.
+- Use case: An toàn cho hầu hết các thao tác `CRUD` thông thường, hiệu suất cao.
+
+#### # repeatable read (bảo đảm tính nhất quán trong suốt transaction)
+
+- Đặc điểm: `Snapshot` dữ liệu được chốt ngay từ lúc bắt đầu `transaction`. Nếu có transaction khác xen vào `update` cùng dòng
+  dữ liệu, hệ thống sẽ báo lỗi `could not serialize access...`
+- Use case: Phù hợp cho tính toán `tài chính, chốt số dư cuối ngày`. Cần implement logic `Retry (thử lại)` ở phía ứng dụng khi gặp lỗi `conflict`.
+
+### # serializable (khắt khe nhất)
+
+- Đặc điểm: Cơ chế `SSI (Serializable Snapshot Isolation)`. Đảm bảo kết quả y hệt như việc ta bắt các transactions xếp hàng chạy từng cái một.
+- Use case: Thống kê phức tạp, tính toán aggregate quyết định đến việc ghi data. `Throughput` thấp nhất và bắt buộc phải có Retry logic.
+
+### # locking strategies: chiến lược khóa dữ liệu
+
+#### # optimistic locking (khóa lạc quan - ở tầng application)
+
+Hoạt động dựa trên niềm tin rằng "rất hiếm khi có conflict". Ta không khóa data ngay, mà chỉ kiểm tra xem data có bị thay đổi hay không tại lúc thực hiện lưu (thường dùng cột version).
+
+```java
+@Entity
+public class Product {
+   @Id
+   private UUID id;
+
+   @Version  // JPA quản lý version tự động
+   private Long version;
+   // ...
+}
+```
+
+→ Phù hợp với các hệ thống `Read-heavy` (đọc nhiều), khi tỉ lệ ghi đè lên cùng 1 record thấp, có thể chấp nhận Retry.
+
+#### # pessimistic locking (khóa bi quan - ở tầng database)
+
+Khóa cứng dòng dữ liệu (row) ngay từ lúc đọc bằng lệnh `SELECT ... FOR UPDATE`. Các transaction khác muốn chạm vào dòng này phải đứng chờ.
+
+```java
+@Query("SELECT p FROM Product p WHERE p.id = :id")
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+Optional<Product> findByIdForUpdate(@Param("id") UUID id);
+```
+
+→ Phù hợp với các hệ thống `Write-heavy` (ghi nhiều), tranh chấp cao như trừ tiền ví điện tử, giảm số lượng tồn kho. Chú ý giữ `transaction` cực ngắn để tránh `Deadlock`.
+
+### # @Transactional trong spring
+
+Spring làm cho việc quản lý transaction trở nên "trong suốt" và nhàn hạ hơn rất nhiều. Tuy nhiên, dùng sai sẽ gây hậu quả khôn lường.
+
+Cấu hình cơ bản:
+
+```java
+@Transactional(
+    propagation = Propagation.REQUIRED,    // Mặc định: Join vào transaction hiện tại hoặc tạo mới
+    isolation = Isolation.READ_COMMITTED,  // Mức độ cách ly
+    rollbackFor = Exception.class,         // Rollback cho mọi loại Exception (Mặc định chỉ rollback RuntimeException)
+    timeout = 5                            // Timeout sau 5 giây
+)
+
+public void transfer(UUID fromId, UUID toId, BigDecimal amount) { ... }
+```
+
+Một số cạm bẫy phổ biến thường gặp khi sử dụng `@Transactional`
+
+#### # lỗi self-invocation (bypass proxy)
+
+Khi gọi một method `@Transactional` từ một method khác trong cùng một class, `Spring Proxy` sẽ bị qua mặt, khiến `transaction context` bị bỏ qua.
+
+```java
+@Service
+public class OrderService {
+   public void processOrder(Order order) { // <--- Hàm này gọi
+       save(order);
+       sendNotification(order);
+   }
+
+   @Transactional(propagation = Propagation.REQUIRES_NEW)
+   public void sendNotification(Order order) {
+       // Thất bại! Do được gọi từ processOrder cùng class, REQUIRES_NEW bị phớt lờ.
+   }
+}
+```
+
+→ _**Cách fix**_: Tách `sendNotification` sang một class `Service` khác.
+
+#### # lỗi LazyInitializationException
+
+Truy cập vào một thuộc tính `Lazy load` (như list con) khi đã đứng ngoài block `@Transactional`.
+
+→ _**Cách fix**_: Dùng `@EntityGraph`, `JOIN FETCH` trong JPQL hoặc đảm bảo đã gọi hàm lấy data ngay trong scope của transaction.
+
+#### # ôm đồ quá nặng (long transactions)
+
+Thực hiện I/O call (như gọi API ngoài, đọc ghi File) bên trong block `@Transactional`. Việc này giữ kết nối Database quá lâu, làm cạn kiệt `Connection Pool`.
+
+→ _**Cách fix**_: Chuẩn bị hết dữ liệu (đọc file, gọi API) ở ngoài, chỉ đẩy logic `Insert/Update` vào bên trong `transaction` (thường kết hợp với xử lý Batch).
+
+### # các mẫu thiết kế tối ưu (advanced patterns)
+
+#### # trị tận gốc lỗi n+1 query
+
+`N+1` là "sát thủ" hiệu năng thầm lặng. Ta query 1 list đơn hàng, sau đó loop qua đơn hàng để lấy chi tiết, sinh ra thêm `N` câu query.
+
+Giải pháp:
+
+- JPQL: `SELECT o FROM Order o JOIN FETCH o.items`
+- Annotation: Cắm `@EntityGraph(attributePaths = {"items"})` lên hàm lấy data.
+- Hibernate: Dùng `@BatchSize` để gộp việc fetch dữ liệu.
+
+#### # chống deadlock chủ động
+
+Deadlock xảy ra khi Transaction 1 giữ Lock A và chờ Lock B, trong khi Transaction 2 giữ Lock B và chờ Lock A.
+
+- Lock ordering: Luôn luôn sắp xếp thứ tự xử lý dữ liệu (ví dụ sort `User ID` từ nhỏ đến lớn) trước khi lock.
+- Retry Pattern: Bọc hàm xử lý bằng `@Retryable` của Spring để tự động chạy lại nếu gặp `Deadlock Exception`.
+
+#### # hàng đợi bằng database (skip locked)
+
+Thay vì dùng RabbitMQ/Kafka cho các task đơn giản, ta có thể dùng `PostgreSQL` làm `Queue`. Để tránh các worker tranh giành nhau 1 record, có thể dùng `SKIP LOCKED`:
+
+```sql
+-- Lấy task đầu tiên đang PENDING, bỏ qua các task đang bị worker khác khóa
+SELECT * FROM tasks WHERE status = 'PENDING' LIMIT 1 FOR UPDATE SKIP LOCKED;
+```
+
+### # decision matrix
+
+Để dễ nhớ, đây là công thức tóm tắt khi nào dùng cái gì:
+| Scenario | Isolation | Locking | Retry |
+| ------------------------ | --------------- | ------------------------ | ---------------- |
+| Simple CRUD | READ COMMITTED | None | No |
+| Balance check + update | REPEATABLE READ | Pessimistic (FOR UPDATE) | Yes |
+| Inventory decrement | READ COMMITTED | Pessimistic (FOR UPDATE) | Yes |
+| Report generation | REPEATABLE READ | None (read-only) | No |
+| Concurrent queue workers | READ COMMITTED | SKIP LOCKED | No |
+| End-of-day batch | SERIALIZABLE | None | Yes (mandatory) |
+| User form save | READ COMMITTED | Optimistic (@Version) | Yes (user retry) |
+| Aggregate + write result | SERIALIZABLE | None | Yes |
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

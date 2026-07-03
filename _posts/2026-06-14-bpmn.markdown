@@ -1,0 +1,697 @@
+---
+layout: post
+title: "bpmn 2.0 — business process model and notation"
+date: 2026-06-14 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, bpmn, best-practices, vietnamese]
+---
+
+### # giới thiệu
+
+BPMN 2.0 (Business Process Model and Notation) là tiêu chuẩn quốc tế của OMG (Object Management Group) cho việc mô hình hóa quy trình nghiệp vụ. Nó cung cấp ký hiệu đồ họa mà cả business analyst lẫn developer đều đọc được — cầu nối giữa "nghiệp vụ muốn gì" và "hệ thống làm gì."
+
+Trong enterprise systems (ngân hàng, bảo hiểm, logistics), BPMN là core technology — platform cho phép thiết kế, deploy, và execute workflows thông qua engine (Activiti, Camunda, Flowable). Process đi qua lifecycle: design → deploy → execute → monitor, tất cả dựa trên BPMN 2.0 XML.
+
+Tại sao senior developer cần hiểu BPMN?
+
+- Đọc/review process definitions do BA tạo
+- Implement service tasks, listeners, delegates
+- Debug process execution issues
+- Optimize process performance
+- Thiết kế integration giữa BPMN engine và microservices
+
+### # kiến trúc bpmn 2.0
+
+Hãy tưởng tượng bạn vẽ flowchart cho quy trình duyệt khoản vay. Bạn cần: điểm bắt đầu (khách hàng nộp đơn), các bước xử lý (thẩm định, phê duyệt), điểm quyết định (duyệt hay từ chối?), và điểm kết thúc (giải ngân hoặc thông báo từ chối). BPMN 2.0 chuẩn hóa tất cả những ký hiệu này — bất kỳ ai đọc diagram đều hiểu cùng 1 ý nghĩa, bất kể tool hay vendor nào.
+
+Điểm quan trọng mà nhiều developer bỏ qua: BPMN 2.0 không chỉ là diagram. Nó là **executable specification**. File BPMN XML vừa là diagram vừa là code — engine (Activiti, Camunda, Flowable) parse XML này và thực thi nó. Diagram đẹp trên UI và code chạy trên server là CÙNG MỘT FILE.
+
+BPMN 2.0 chia thành 5 nhóm elements chính
+
+![bpmn-elements](/assets/img/blog/bpmn/bpmn-elements.png)
+
+Bạn không cần thuộc lòng tất cả — 80% process dùng lặp đi lặp lại khoảng 10-15 elements. Phần tiếp theo đi sâu vào từng nhóm với ví dụ thực tế.
+
+### # events — "điều gì xảy ra"
+
+Events là những **sự kiện** xảy ra trong vòng đời process. Chúng được biểu diễn bằng hình tròn — và chính viền của hình tròn cho bạn biết loại event:
+
+- Viền mảnh (thin) = Start Event
+- Viền đôi (double) = Intermediate Event
+- Viền dày (bold) = End Event
+
+Bên trong hình tròn, icon cho biết **trigger type**: đồng hồ (timer), phong bì (message), sấm sét (signal), lửa (error)...
+
+Một điểm quan trọng mà nhiều người bỏ qua: events chia thành **Catching** (chờ sự kiện đến) và **Throwing** (phát ra sự kiện). Catching event = "tôi đang đợi cái gì đó xảy ra." Throwing event = "tôi thông báo cho thế giới biết cái gì đó đã xảy ra." Phân biệt này cực kỳ quan trọng khi design inter-process communication.
+
+Trong thực tế, bạn sẽ gặp nhiều nhất:
+
+- **Timer events**: deadline cho approval tasks (48h không duyệt → escalate)
+- **Message events**: nhận webhook từ external system, hoặc inter-service triggers
+- **Error events**: payment failed → rollback → chuyển sang manual handling
+
+#### # start events — khởi đầu process
+
+| Event             | Ký hiệu        | Mô tả                          | Use case                   |
+| ----------------- | -------------- | ------------------------------ | -------------------------- |
+| None Start        | (empty circle) | Manually triggered             | User click "Start Process" |
+| Timer Start       | với clock      | Triggered theo schedule        | Daily report generation    |
+| Message Start     | với envelope   | Triggered bởi message          | Order received from API    |
+| Signal Start      | với triangle   | Triggered bởi broadcast signal | System-wide event          |
+| Conditional Start | với paper      | Triggered khi condition = true | KPI threshold exceeded     |
+
+```xml
+<!-- None Start Event -->
+<startEvent id="start" name="Start Process"/>
+
+<!-- Timer Start Event: chạy mỗi ngày lúc 8:00 AM -->
+<startEvent id="timerStart" name="Daily Trigger">
+   <timerEventDefinition>
+       <timeCycle>0 0 8 * * ?</timeCycle>
+   </timerEventDefinition>
+</startEvent>
+
+<!-- Message Start Event -->
+<startEvent id="msgStart" name="Order Received">
+   <messageEventDefinition messageRef="orderMessage"/>
+</startEvent>
+```
+
+### # intermediate events — giữa process
+
+Intermediate events xảy ra giữa start và end — chờ event, ném signal, delay process.
+
+```xml
+<!-- Timer Intermediate (wait/delay) -->
+<intermediateCatchEvent id="wait3days" name="Wait 3 Days">
+   <timerEventDefinition>
+       <timeDuration>P3D</timeDuration>  <!-- ISO 8601: 3 days -->
+   </timerEventDefinition>
+</intermediateCatchEvent>
+
+<!-- Message Intermediate Catch (wait for message) -->
+<intermediateCatchEvent id="waitApproval" name="Wait for Approval">
+   <messageEventDefinition messageRef="approvalMessage"/>
+</intermediateCatchEvent>
+
+<!-- Signal Throw (broadcast to all processes listening) -->
+<intermediateThrowEvent id="notifyAll" name="Notify All">
+   <signalEventDefinition signalRef="processCompleteSignal"/>
+</intermediateThrowEvent>
+
+<!-- Boundary Timer (attached to task — deadline/timeout) -->
+<boundaryEvent id="deadline" attachedToRef="reviewTask" cancelActivity="true">
+   <timerEventDefinition>
+       <timeDuration>PT48H</timeDuration>  <!-- 48 hours timeout -->
+   </timerEventDefinition>
+</boundaryEvent>
+<!-- Nếu reviewTask không xong trong 48h → cancel task, đi đường khác -->
+```
+
+#### # end events — kết thúc process
+
+| Event         | Mô tả                                         | Effect                |
+| ------------- | --------------------------------------------- | --------------------- |
+| None End      | Process instance kết thúc bình thường         | Terminate path        |
+| Terminate End | Kết thúc TẤT CẢ paths (parallel) ngay lập tức | Kill toàn bộ instance |
+| Error End     | Throw error (catch bởi boundary error event)  | Error propagation     |
+| Message End   | Gửi message khi kết thúc                      | Notify external       |
+| Signal End    | Broadcast signal khi kết thúc                 | Notify all listeners  |
+
+```xml
+<!-- Normal End -->
+<endEvent id="end" name="Process Complete"/>
+
+<!-- Terminate End: kill tất cả parallel paths -->
+<endEvent id="terminateEnd" name="Abort All">
+   <terminateEventDefinition/>
+</endEvent>
+
+<!-- Error End: throw error lên parent process -->
+<endEvent id="errorEnd" name="Payment Failed">
+   <errorEventDefinition errorRef="paymentError"/>
+</endEvent>
+```
+
+### # activities — "công việc được thực hiện"
+
+Nếu Events là "điều gì xảy ra" và Gateways là "đi đường nào", thì Activities là nơi **công việc thực sự được hoàn thành**. Đây là phần developer tương tác nhiều nhất — vì mỗi Activity có thể map thành code bạn viết.
+
+Activities biểu diễn bằng hình chữ nhật bo góc. Icon ở góc trên-trái cho biết type: người (user task), bánh răng (service task), script (script task)...
+
+Điểm mấu chốt cho developer: **User Task** tạo "wait state" — process dừng lại, chờ con người hoàn thành form/approval. **Service Task** là nơi bạn plug Java code vào — gọi API, tính toán, send notification. Đây là integration point giữa BPMN diagram và Spring Boot services.
+
+Trong hầu hết BPMN projects, mỗi Service Task delegate tới một Spring bean. Business Analyst vẽ diagram, developer implement delegates. Hai bên làm việc parallel mà không block nhau — đó là sức mạnh của BPMN.
+
+#### # task types
+
+| Task Type          | Icon | Mô tả                                | Implementation         |
+| ------------------ | ---- | ------------------------------------ | ---------------------- |
+| User Task          | 👤   | Con người thực hiện (form, approval) | Assigned to user/group |
+| Service Task       | ⚙️   | Hệ thống tự động thực hiện           | Java class, REST call  |
+| Script Task        | 📜   | Execute script (Groovy, JS)          | Inline code            |
+| Send Task          | ✉️   | Gửi message                          | Message broker, email  |
+| Receive Task       | 📨   | Chờ nhận message                     | Wait state             |
+| Business Rule Task | 📋   | Execute business rules               | DMN decision table     |
+| Manual Task        | ✋   | Task ngoài hệ thống (physical)       | No system interaction  |
+| Call Activity      | ↗️   | Gọi process khác (reusable)          | Sub-process reference  |
+
+#### # user task — human interaction
+
+```xml
+<userTask id="approveRequest" name="Approve Loan Request"
+         activiti:assignee="${applicant}"
+         activiti:candidateGroups="loan-approvers">
+   <documentation>Review loan application and approve/reject</documentation>
+
+   <!-- Form properties (hiển thị form cho user) -->
+   <extensionElements>
+       <activiti:formProperty id="decision" name="Decision"
+           type="enum" required="true">
+           <activiti:value id="approve" name="Approve"/>
+           <activiti:value id="reject" name="Reject"/>
+       </activiti:formProperty>
+       <activiti:formProperty id="comments" name="Comments"
+           type="string" required="false"/>
+   </extensionElements>
+</userTask>
+```
+
+#### # service task — automated work
+
+```xml
+<!-- Java Delegate -->
+<serviceTask id="calculateScore" name="Calculate Credit Score"
+            activiti:class="com.example.bpm.delegate.CreditScoreDelegate"/>
+
+<!-- Expression (call Spring bean method) -->
+<serviceTask id="sendNotification" name="Send Email"
+            activiti:expression="${notificationService.sendEmail(execution)}"/>
+
+<!-- Delegate Expression (Spring bean) -->
+<serviceTask id="processPayment" name="Process Payment"
+            activiti:delegateExpression="${paymentDelegate}"/>
+
+<!-- HTTP Task (REST call) -->
+<serviceTask id="callExternalApi" name="Verify Identity"
+            activiti:type="http">
+   <extensionElements>
+       <activiti:field name="requestMethod" stringValue="POST"/>
+       <activiti:field name="requestUrl"
+           stringValue="http://identity-service/api/v1/verify"/>
+       <activiti:field name="requestBody"
+           expression="${execution.getVariable('requestPayload')}"/>
+   </extensionElements>
+</serviceTask>
+```
+
+#### # java delegate implementation
+
+```java
+@Component("creditScoreDelegate")
+@RequiredArgsConstructor
+@Slf4j
+public class CreditScoreDelegate implements JavaDelegate {
+
+   private final CreditScoringService scoringService;
+
+   @Override
+   public void execute(DelegateExecution execution) {
+       String customerId = (String) execution.getVariable("customerId");
+       BigDecimal loanAmount = (BigDecimal) execution.getVariable("loanAmount");
+
+       log.info("Calculating credit score | customerId={} | loanAmount={}",
+           customerId, loanAmount);
+
+       CreditScore score = scoringService.calculate(customerId, loanAmount);
+
+       // Set process variables cho downstream tasks
+       execution.setVariable("creditScore", score.getValue());
+       execution.setVariable("riskLevel", score.getRiskLevel().name());
+       execution.setVariable("autoApproved", score.getValue() >= 750);
+   }
+}
+```
+
+#### # sub-process — embedded process logic
+
+```xml
+<!-- Embedded Sub-Process: nhóm related tasks, shared error handling -->
+<subProcess id="paymentSubProcess" name="Payment Processing">
+   <startEvent id="payStart"/>
+   <serviceTask id="validatePayment" name="Validate"/>
+   <serviceTask id="executePayment" name="Execute"/>
+   <serviceTask id="confirmPayment" name="Confirm"/>
+   <endEvent id="payEnd"/>
+
+   <!-- Sequence flows within sub-process -->
+   <sequenceFlow sourceRef="payStart" targetRef="validatePayment"/>
+   <sequenceFlow sourceRef="validatePayment" targetRef="executePayment"/>
+   <sequenceFlow sourceRef="executePayment" targetRef="confirmPayment"/>
+   <sequenceFlow sourceRef="confirmPayment" targetRef="payEnd"/>
+
+   <!-- Error boundary on entire sub-process -->
+   <boundaryEvent id="paymentError" attachedToRef="paymentSubProcess">
+       <errorEventDefinition errorRef="paymentFailedError"/>
+   </boundaryEvent>
+</subProcess>
+```
+
+#### # multi-instance - loop/parallel execution
+
+```xml
+<!-- Sequential: process items one by one -->
+<serviceTask id="processItem" name="Process Item"
+            activiti:delegateExpression="${itemProcessor}">
+   <multiInstanceLoopCharacteristics isSequential="true"
+       activiti:collection="${orderItems}"
+       activiti:elementVariable="currentItem"/>
+</serviceTask>
+
+<!-- Parallel: process ALL items simultaneously -->
+<userTask id="approveByAll" name="Approve By All Managers"
+         activiti:candidateGroups="managers">
+   <multiInstanceLoopCharacteristics isSequential="false"
+       activiti:collection="${approverList}"
+       activiti:elementVariable="approver">
+       <!-- Complete when 60% approved -->
+       <completionCondition>${nrOfCompletedInstances / nrOfInstances >= 0.6}</completionCondition>
+   </multiInstanceLoopCharacteristics>
+</userTask>
+```
+
+### # gateways - "quyết định & hợp nhất"
+
+Gateway là "ngã tư" trong process flow. Khi execution token đến gateway, nó phải quyết định: đi đường nào? Chia ra bao nhiêu đường? Chờ bao nhiêu đường hợp lại mới tiếp tục?
+
+Hình kim cương (◇) là ký hiệu - và icon bên trong cho biết loại:
+
+- **X** (hoặc trống) = Exclusive (XOR): chọn đúng 1 đường, giống if-else
+- **+** = Parallel (AND): đi TẤT CẢ đường cùng lúc, chờ TẤT CẢ ở merge
+- **O** = Inclusive (OR): đi 1 hoặc nhiều đường tùy conditions
+
+Sai lầm phổ biến nhất: **quên gateway merge**. Bạn split bằng Parallel Gateway → 3 paths chạy song song → nhưng nếu không có Parallel Gateway ở cuối để merge, process sẽ tạo 3 "token" riêng biệt chạy đến end event, gây duplicate completion events hoặc race conditions.
+
+Một gateway CÓ THỂ vừa split vừa merge (mixed gateway), nhưng best practice là tách rõ: 1 gateway cho fork, 1 gateway cho join — dễ đọc và debug hơn nhiều.
+
+#### # exclusive gateway (xor) — chọn 1 trong n paths
+
+Giống if-else: chỉ 1 path được chọn dựa trên condition.
+
+```xml
+<exclusiveGateway id="decisionGateway" name="Approve or Reject?"/>
+
+<sequenceFlow sourceRef="decisionGateway" targetRef="approvedPath">
+   <conditionExpression xsi:type="tFormalExpression">
+       ${decision == 'approve'}
+   </conditionExpression>
+</sequenceFlow>
+
+<sequenceFlow sourceRef="decisionGateway" targetRef="rejectedPath">
+   <conditionExpression xsi:type="tFormalExpression">
+       ${decision == 'reject'}
+   </conditionExpression>
+</sequenceFlow>
+
+<!-- Default flow (khi không condition nào match) -->
+<sequenceFlow sourceRef="decisionGateway" targetRef="manualReview"
+             id="defaultFlow"/>
+<exclusiveGateway id="decisionGateway" default="defaultFlow"/>
+```
+
+#### # parallel gateway (and) — chạy tất cả paths đồng thời
+
+Fork: tạo parallel execution. Join: chờ TẤT CẢ paths hoàn thành.
+
+```xml
+<!-- Fork: split into parallel paths -->
+<parallelGateway id="forkGateway"/>
+<sequenceFlow sourceRef="forkGateway" targetRef="sendEmail"/>
+<sequenceFlow sourceRef="forkGateway" targetRef="updateInventory"/>
+<sequenceFlow sourceRef="forkGateway" targetRef="generateInvoice"/>
+
+<!-- Tất cả 3 tasks chạy ĐỒNG THỜI -->
+
+<!-- Join: wait for ALL to complete -->
+<parallelGateway id="joinGateway"/>
+<sequenceFlow sourceRef="sendEmail" targetRef="joinGateway"/>
+<sequenceFlow sourceRef="updateInventory" targetRef="joinGateway"/>
+<sequenceFlow sourceRef="generateInvoice" targetRef="joinGateway"/>
+
+<!-- Chỉ tiếp tục khi cả 3 xong -->
+<sequenceFlow sourceRef="joinGateway" targetRef="completeOrder"/>
+```
+
+#### # inclusive gateway (or) — chạy 1 hoặc nhiều paths
+
+Linh hoạt hơn XOR (chỉ 1) và AND (tất cả). Chạy mọi paths có condition = true.
+
+```xml
+<inclusiveGateway id="notifyGateway" name="Notification Channels"/>
+
+<!-- Chạy tất cả paths có condition true -->
+<sequenceFlow sourceRef="notifyGateway" targetRef="sendSms">
+   <conditionExpression>${customer.phoneVerified == true}</conditionExpression>
+</sequenceFlow>
+<sequenceFlow sourceRef="notifyGateway" targetRef="sendEmail">
+   <conditionExpression>${customer.email != null}</conditionExpression>
+</sequenceFlow>
+<sequenceFlow sourceRef="notifyGateway" targetRef="pushNotification">
+   <conditionExpression>${customer.deviceToken != null}</conditionExpression>
+</sequenceFlow>
+
+<!-- Merge: chờ tất cả activated paths hoàn thành -->
+<inclusiveGateway id="notifyJoin"/>
+```
+
+#### # event-based gateway — chờ event nào đến trước
+
+```xml
+<!-- Chờ: hoặc customer respond, hoặc timeout 7 ngày -->
+<eventBasedGateway id="waitGateway"/>
+
+<sequenceFlow sourceRef="waitGateway" targetRef="customerResponse"/>
+<intermediateCatchEvent id="customerResponse">
+   <messageEventDefinition messageRef="responseMessage"/>
+</intermediateCatchEvent>
+
+<sequenceFlow sourceRef="waitGateway" targetRef="timeout"/>
+<intermediateCatchEvent id="timeout">
+   <timerEventDefinition>
+       <timeDuration>P7D</timeDuration>
+   </timerEventDefinition>
+</intermediateCatchEvent>
+<!-- Event nào đến TRƯỚC → đi path đó, cancel paths còn lại -->
+```
+
+### # process variables & expressions
+
+Process variables là "bộ nhớ" của process instance. Mỗi instance có riêng set variables — giống HTTP session nhưng cho workflow. Variables truyền data giữa tasks: task A set `creditScore = 750`, gateway B đọc `${creditScore >= 700}` để quyết định approve hay reject.
+
+Điều developer cần nhớ: variables được **serialized và persist vào database**. Mỗi lần set variable = 1 row INSERT/UPDATE. Đừng store large objects (file content, huge lists) — chỉ store IDs, references, summary data. Large data nên lưu ở document store (MongoDB) và chỉ truyền ID qua process variable.
+
+Variable scope cũng quan trọng: variable set ở parent process có thể đọc ở sub-process, nhưng variable set trong sub-process mặc định không visible ở parent (trừ khi map explicitly). Hiểu scope giúp tránh bugs "variable not found" khó debug.
+
+Expression language trong Activiti là **UEL (Unified Expression Language)** — syntax giống JSP EL. Bạn có thể gọi Spring bean methods trực tiếp: `${orderService.calculateTotal(orderId)}`. Engine resolve bean name từ Spring ApplicationContext.
+
+```java
+// Set variable khi start process
+Map<String, Object> variables = new HashMap<>();
+variables.put("applicantName", "Nguyen Van A");
+variables.put("loanAmount", new BigDecimal("500000000"));
+variables.put("applicationDate", LocalDate.now());
+variables.put("documents", documentList);
+
+ProcessInstance instance = runtimeService.startProcessInstanceByKey(
+   "loan-approval", businessKey, variables);
+
+// Read/write trong Java Delegate
+@Override
+public void execute(DelegateExecution execution) {
+   BigDecimal amount = (BigDecimal) execution.getVariable("loanAmount");
+   execution.setVariable("interestRate", calculateRate(amount));
+
+   // Transient variable (không persist, chỉ tồn tại trong memory)
+   execution.setTransientVariable("tempCalculation", intermediateResult);
+}
+
+// Expression trong BPMN XML
+// UEL (Unified Expression Language)
+${applicantName}                          // Read variable
+${loanAmount > 1000000000}                // Condition
+${riskLevel == 'HIGH' ? 'manual' : 'auto'} // Ternary
+${orderService.calculateTotal(orderId)}    // Call Spring bean method
+#{execution.getVariable('status')}         // Alternative syntax
+```
+
+### # listeners & lifecycle hooks
+
+Listeners là "event hooks" của BPMN engine — giống `@EventListener` trong Spring nhưng cho process lifecycle. Chúng cho phép bạn chạy code tại các điểm cụ thể: khi task được tạo, khi task complete, khi process start/end, khi execution đi qua một sequence flow.
+
+Tại sao cần listeners thay vì đặt logic trong delegates? Vì listeners là **cross-cutting concerns**: audit logging, metrics collection, notification dispatch, SLA monitoring. Bạn không muốn mỗi delegate phải gọi `auditService.log()` — thay vào đó, 1 listener lắng nghe tất cả tasks và log tự động.
+
+Có 2 loại chính:
+
+- **Execution Listener**: hook vào flow execution (start/end của process, activity, sequence flow)
+- **Task Listener**: hook vào user task lifecycle (create, assign, complete, delete)
+
+Trong production systems, listeners thường dùng cho:
+
+- Gửi notification khi task assign cho user
+- Log audit trail cho compliance
+- Update dashboard/analytics real-time
+- Set deadline/SLA timer
+- Auto-assign task dựa trên workload balancing
+
+#### # execution listeners — hook vào process flow
+
+```xml
+<userTask id="approveTask" name="Approve">
+   <extensionElements>
+       <!-- Chạy khi task START -->
+       <activiti:executionListener event="start"
+           delegateExpression="${taskAuditListener}"/>
+       <!-- Chạy khi task END -->
+       <activiti:executionListener event="end"
+           expression="${metricsService.recordTaskCompletion(execution)}"/>
+   </extensionElements>
+</userTask>
+
+<!-- Process-level listener -->
+<process id="loanProcess">
+   <extensionElements>
+       <activiti:executionListener event="start"
+           delegateExpression="${processStartListener}"/>
+       <activiti:executionListener event="end"
+           delegateExpression="${processEndListener}"/>
+   </extensionElements>
+</process>
+```
+
+#### # task listeners — specific to user tasks
+
+```xml
+<userTask id="reviewTask">
+   <extensionElements>
+       <!-- Khi task được CREATE (assigned to someone) -->
+       <activiti:taskListener event="create"
+           delegateExpression="${taskAssignmentListener}"/>
+       <!-- Khi task COMPLETE -->
+       <activiti:taskListener event="complete"
+           expression="${notificationService.notifyCompletion(task)}"/>
+       <!-- Khi task bị DELETE (cancelled) -->
+       <activiti:taskListener event="delete"
+           delegateExpression="${taskCancellationListener}"/>
+   </extensionElements>
+</userTask>
+```
+
+```java
+@Component("taskAssignmentListener")
+@RequiredArgsConstructor
+@Slf4j
+public class TaskAssignmentListener implements TaskListener {
+
+   private final NotificationService notificationService;
+
+   @Override
+   public void notify(DelegateTask task) {
+       String assignee = task.getAssignee();
+       String taskName = task.getName();
+       String processId = task.getProcessInstanceId();
+
+       log.info("Task assigned | task={} | assignee={} | processId={}",
+           taskName, assignee, processId);
+
+       notificationService.sendTaskNotification(assignee,
+           "New task assigned: " + taskName);
+   }
+}
+```
+
+### # error handling in bpmn
+
+Đây là phần nhiều team làm sai — hoặc không handle errors trong BPMN (let it crash), hoặc handle sai cách (try-catch trong delegate rồi swallow exception). BPMN có error handling mechanism riêng, và nó rất powerful khi dùng đúng.
+
+Concept chính: **Boundary Error Event**. Bạn "gắn" error event lên task — nếu task throw `BpmnError`, execution token rẽ sang error path thay vì tiếp tục normal flow. Giống try-catch nhưng ở level process diagram — BA nhìn thấy error handling logic trực quan.
+
+Quan trọng: chỉ `BpmnError` (throw từ Java Delegate) được catch bởi boundary event. Các exceptions khác (`NullPointerException`, `RuntimeException`...) KHÔNG bị catch — chúng fail task và cần retry/manual intervention. Đây là design choice: `BpmnError` = "business error tôi dự đoán được", other exceptions = "bug cần fix."
+
+**Compensation** (undo pattern) là advanced feature cho distributed operations. Khi process gồm nhiều steps đã complete (reserve inventory → charge payment → book shipping), nếu step cuối fail, bạn cần undo các steps trước. BPMN compensation = SAGA pattern — mỗi task có 1 compensation handler để rollback.
+
+#### # boundary error event — catch errors từ task
+
+```xml
+<serviceTask id="callPayment" name="Process Payment"
+            activiti:delegateExpression="${paymentDelegate}"/>
+
+<!-- Boundary error event: catch payment failure -->
+<boundaryEvent id="paymentFailed" attachedToRef="callPayment">
+   <errorEventDefinition errorRef="PAYMENT_FAILED"/>
+</boundaryEvent>
+
+<!-- Khi paymentDelegate throw BpmnError("PAYMENT_FAILED") -->
+<sequenceFlow sourceRef="paymentFailed" targetRef="handlePaymentFailure"/>
+<serviceTask id="handlePaymentFailure" name="Handle Payment Failure"
+            activiti:delegateExpression="${paymentFailureHandler}"/>
+```
+
+```java
+@Component("paymentDelegate")
+public class PaymentDelegate implements JavaDelegate {
+   @Override
+   public void execute(DelegateExecution execution) {
+       try {
+           paymentService.process(execution.getVariable("paymentId"));
+       } catch (PaymentDeclinedException e) {
+           // Throw BpmnError → caught by boundary error event
+           throw new BpmnError("PAYMENT_FAILED", e.getMessage());
+       }
+       // Các exceptions KHÔNG phải BpmnError → escalate lên process level
+   }
+}
+```
+
+#### # compensation — undo completed work (saga pattern)
+
+```xml
+<!-- Task đã complete thành công -->
+<serviceTask id="reserveInventory" name="Reserve Inventory"
+            activiti:delegateExpression="${inventoryReserveDelegate}"/>
+
+<!-- Compensation handler: undo reservation nếu process cần rollback -->
+<boundaryEvent id="compensateReserve" attachedToRef="reserveInventory">
+   <compensateEventDefinition/>
+</boundaryEvent>
+<serviceTask id="cancelReservation" name="Cancel Reservation"
+            isForCompensation="true"
+            activiti:delegateExpression="${inventoryReleaseDelegate}"/>
+<association sourceRef="compensateReserve" targetRef="cancelReservation"/>
+
+<!-- Trigger compensation khi cần undo -->
+<intermediateThrowEvent id="undoAll" name="Compensate All">
+   <compensateEventDefinition/>
+</intermediateThrowEvent>
+```
+
+### # activiti integration trong spring boot
+
+Đây là phần kết nối lý thuyết BPMN với thực tế code. Activiti là BPMN engine chạy trên Spring Boot — nó parse BPMN XML, tạo database schema để track process state, và execute flow logic.
+
+Khi bạn deploy 1 BPMN file, Activiti lưu process definition vào database. Khi start process instance, engine tạo "execution token" chạy qua diagram — token dừng ở wait states (user tasks, message catch events), tiến khi conditions met. Mỗi token có riêng variables và state, persist qua server restart.
+
+Trong kiến trúc microservices, thường có 1 dedicated service host Activiti engine. Các services khác gọi API để deploy definitions, start instances, complete tasks. Engine trigger Service Tasks bằng cách gọi Java Delegates — những Spring beans bạn viết.
+
+Key services cần biết:
+
+- `RepositoryService`: Deploy, query process definitions
+- `RuntimeService`: Start instances, signal events, set variables
+- `TaskService`: Query/complete user tasks, claim/delegate
+- `HistoryService`: Query completed instances, audit trail
+- `ManagementService`: Jobs, deadletter jobs, engine config
+
+#### # process engine configuration
+
+```java
+@Configuration
+public class ActivitiConfig {
+
+   @Bean
+   public SpringProcessEngineConfiguration processEngineConfiguration(
+           DataSource dataSource,
+           PlatformTransactionManager transactionManager) {
+
+       SpringProcessEngineConfiguration config = new SpringProcessEngineConfiguration();
+       config.setDataSource(dataSource);
+       config.setTransactionManager(transactionManager);
+       config.setDatabaseSchemaUpdate("true");
+       config.setAsyncExecutorActivate(true);
+       config.setHistoryLevel(HistoryLevel.FULL);
+       return config;
+   }
+}
+```
+
+#### # deploy & execute process
+
+```java
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ProcessService {
+
+   private final RepositoryService repositoryService;
+   private final RuntimeService runtimeService;
+   private final TaskService taskService;
+   private final HistoryService historyService;
+
+   // Deploy process definition
+   public String deploy(String bpmnXml, String processName) {
+       Deployment deployment = repositoryService.createDeployment()
+           .name(processName)
+           .addString(processName + ".bpmn20.xml", bpmnXml)
+           .deploy();
+       return deployment.getId();
+   }
+
+   // Start process instance
+   public String startProcess(String processKey, Map<String, Object> variables) {
+       ProcessInstance instance = runtimeService.startProcessInstanceByKey(
+           processKey, UUID.randomUUID().toString(), variables);
+       log.info("Process started | key={} | instanceId={}", processKey, instance.getId());
+       return instance.getId();
+   }
+
+   // Complete user task
+   public void completeTask(String taskId, Map<String, Object> variables) {
+       taskService.complete(taskId, variables);
+   }
+
+   // Query active tasks for user
+   public List<TaskDTO> getMyTasks(String userId) {
+       return taskService.createTaskQuery()
+           .taskAssignee(userId)
+           .orderByTaskCreateTime().desc()
+           .list()
+           .stream()
+           .map(this::toDTO)
+           .toList();
+   }
+}
+```
+
+### # best practices
+
+Sau nhiều năm làm việc với BPMN engines trong production, đây là những lessons learned đau thương nhất:
+
+**Về thiết kế process:**
+
+1. **Keep processes simple** — Nếu process diagram quá phức tạp (>30 elements), tách thành sub-processes hoặc call activities. Rule of thumb: nếu diagram không fit 1 màn hình, nó quá phức tạp. BA và developer đều cần đọc được trong 30 giây.
+
+2. **Happy path trước, exceptions sau** — Vẽ main flow trước cho nó chạy. Sau đó mới thêm error boundaries, timeouts, compensation. Đừng cố handle mọi edge case lúc ban đầu.
+
+3. **Version process definitions** — Mỗi lần deploy = version mới. Running instances giữ version cũ và chạy đến khi complete. Không bao giờ update definition đang có instances running — tạo version mới.
+
+**Về implementation:**
+
+4. **Service tasks phải idempotent** — Process engine có thể retry failed tasks (especially với async executor). Nếu `chargePayment()` không idempotent, customer bị charge 2 lần. Dùng idempotency keys.
+
+5. **Boundary timer trên MỌI user task** — Không có task nào nên wait forever. 48h không approve → escalate lên manager. 7 ngày không response → auto-cancel. Đây là SLA enforcement.
+
+6. **Async cho heavy service tasks** — `activiti:async="true"` cho tasks nặng (call external API, process files). Nếu không, 1 slow task block toàn bộ execution thread pool → ảnh hưởng tất cả process instances.
+
+7. **Variables nhẹ, reference nặng** — Không store 10MB file content trong process variable. Store file ID, fetch khi cần. Variables persist vào RDBMS — bloat chúng = slow queries toàn engine.
+
+**Về operations:**
+
+8. **Monitor stuck instances** — Dashboard alert cho: instances running > X days, tasks unassigned > 24h, failed jobs in deadletter queue. Đây là silent failures — không ai biết trừ khi bạn monitor.
+
+9. **Test processes end-to-end** — Unit test từng delegate, integration test toàn process flow. Activiti cung cấp `ActivitiRule` cho testing — deploy process, start instance, assert state at each step.
+
+10. **Compensation cho distributed ops** — Khi process span nhiều services (reserve inventory + charge payment + ship order), dùng SAGA pattern thay vì distributed transactions. BPMN compensation events = native SAGA support.
+11. **Monitor execution** — Track duration, stuck tasks, error rates per process definition
+12. **Compensation cho distributed operations** — Saga pattern thay vì distributed transactions
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

@@ -1,0 +1,543 @@
+---
+layout: post
+title: "bitwise operations in java"
+date: 2025-06-30 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, best-practices, vietnamese]
+---
+
+### # tại sao developer cần biết bitwise?
+
+Phần lớn thời gian bạn viết business logic — CRUD, validation, API calls — không cần bitwise. Nhưng có những scenarios mà bitwise là tool duy nhất hoặc tối ưu nhất:
+
+- **Permission systems**: Linux file permissions (rwx = 111 = 7), feature flags, role-based bitmasks
+- **Protocol/network programming**: Parse binary protocols, IP subnet masks, checksums
+- **Performance-critical code**: Faster than arithmetic cho certain operations (multiply/divide by powers of 2)
+- **Flags & options**: Combine multiple boolean options vào 1 integer (giống `java.util.regex.Pattern.CASE_INSENSITIVE | Pattern.MULTILINE`)
+- **Low-level data manipulation**: Color manipulation (ARGB), encryption, compression
+- **Interview questions**: Senior-level algorithm questions thường involve bitwise
+
+Trong Java enterprise, bạn gặp bitwise nhiều nhất ở: permission bitmasks, hashCode implementations, enum flags, và đọc/debug framework source code (HashMap, ConcurrentHashMap dùng bitwise heavily).
+
+### # cơ bản — biểu diễn nhị phân
+
+Mọi số trong máy tính đều là chuỗi bits (0 và 1). Java `int` = 32 bits, `long` = 64 bits.
+
+```java
+int a = 13;
+// Binary: 0000 0000 0000 0000 0000 0000 0000 1101
+//         = 8 + 4 + 1 = 13
+
+int b = 7;
+// Binary: 0000 0000 0000 0000 0000 0000 0000 0111
+//         = 4 + 2 + 1 = 7
+
+// Xem binary representation
+System.out.println(Integer.toBinaryString(13));  // "1101"
+System.out.println(Integer.toBinaryString(7));   // "111"
+System.out.println(Integer.toBinaryString(-1));  // "11111111111111111111111111111111" (32 ones)
+
+// Parse binary string thành int
+int x = Integer.parseInt("1101", 2);  // 13
+int y = 0b1101;  // Java literal binary (từ Java 7)
+```
+
+#### # negative numbers — two's complement
+
+Java dùng **Two's Complement** cho signed integers. Bit cao nhất (MSB) = sign bit:
+
+- 0 = positive
+- 1 = negative
+
+```java
+// +5:  0000...0101
+// -5:  1111...1011 (flip all bits of 5, then add 1)
+
+int positive = 5;   // 0000 0000 0000 0000 0000 0000 0000 0101
+int negative = -5;  // 1111 1111 1111 1111 1111 1111 1111 1011
+
+// Verify: ~5 + 1 = -5
+System.out.println(~5 + 1);  // -5
+```
+
+### # bitwise operators — bảng đầy đủ
+
+#### # AND (`&`) — cả hai bit đều 1 → 1
+
+Dùng để **tắt bits** (mask off), **kiểm tra bit** có set không.
+
+```java
+//   1101 (13)
+// & 0111 (7)
+// = 0101 (5)
+
+int result = 13 & 7;  // 5
+
+// Use case: Kiểm tra số chẵn/lẻ
+boolean isOdd = (n & 1) == 1;   // Bit cuối cùng = 1 → lẻ
+boolean isEven = (n & 1) == 0;  // Bit cuối cùng = 0 → chẵn
+
+// Use case: Mask off upper bits (lấy lower 8 bits)
+int lowerByte = value & 0xFF;  // 0xFF = 0000...11111111
+```
+
+#### # OR (`|`) — ít nhất 1 bit là 1 → 1
+
+Dùng để **bật bits** (set flags), **combine options**.
+
+```java
+//   1101 (13)
+// | 0111 (7)
+// = 1111 (15)
+
+int result = 13 | 7;  // 15
+
+// Use case: Set a flag
+int permissions = 0;
+permissions |= READ;    // Bật READ flag
+permissions |= WRITE;   // Bật WRITE flag (giữ READ)
+
+// Use case: Combine regex flags
+Pattern pattern = Pattern.compile("hello",
+   Pattern.CASE_INSENSITIVE | Pattern.MULTILINE | Pattern.DOTALL);
+// Internally: 2 | 8 | 32 = 42 = 101010 in binary
+```
+
+#### # XOR (`^`) — Khác nhau → 1, giống nhau → 0
+
+Dùng để **toggle bits**, **swap**, **find unique element**.
+
+```java
+//   1101 (13)
+// ^ 0111 (7)
+// = 1010 (10)
+
+int result = 13 ^ 7;  // 10
+
+// Use case: Toggle a flag
+flags ^= DARK_MODE;  // Bật nếu đang tắt, tắt nếu đang bật
+
+// Use case: Swap 2 số KHÔNG dùng temp variable
+a ^= b;  // a = a XOR b
+b ^= a;  // b = b XOR (a XOR b) = original a
+a ^= b;  // a = (a XOR b) XOR a = original b
+
+// Use case: Tìm số xuất hiện 1 lần (mọi số khác xuất hiện 2 lần)
+int[] nums = {2, 3, 5, 3, 2};
+int unique = 0;
+for (int num : nums) unique ^= num;
+// 0^2^3^5^3^2 = 5 (pairs cancel out: x^x=0)
+
+// XOR properties:
+// a ^ 0 = a        (identity)
+// a ^ a = 0        (self-inverse)
+// a ^ b = b ^ a    (commutative)
+// (a ^ b) ^ c = a ^ (b ^ c)  (associative)
+```
+
+#### # NOT (`~`) — flip tất cả bits
+
+```java
+// ~13 = ~(0000...1101) = 1111...0010 = -14 (two's complement)
+int result = ~13;  // -14
+
+// Relationship: ~n = -(n+1)
+// ~0 = -1, ~1 = -2, ~(-1) = 0
+
+// Use case: Tạo bitmask "tất cả trừ bit X"
+int allExceptBit3 = ~(1 << 3);  // 1111...11110111
+permissions &= allExceptBit3;    // Clear bit 3
+```
+
+#### # left shift (`<<`) — dịch trái, thêm 0 bên phải
+
+Mỗi lần shift trái 1 = nhân 2. Shift trái n = nhân 2^n.
+
+```java
+// 13 << 2 = 1101 << 2 = 110100 = 52
+int result = 13 << 2;  // 13 * 4 = 52
+
+// Use case: Nhân nhanh với power of 2
+int doubled = n << 1;      // n * 2
+int quadrupled = n << 2;   // n * 4
+int times8 = n << 3;       // n * 8
+
+// Use case: Tạo bitmask cho position cụ thể
+int bit0 = 1 << 0;  // 0001 = 1
+int bit1 = 1 << 1;  // 0010 = 2
+int bit2 = 1 << 2;  // 0100 = 4
+int bit3 = 1 << 3;  // 1000 = 8
+```
+
+#### # right shift (`>>`) — dịch phải, giữ sign bit (arithmetic shift)
+
+Mỗi lần shift phải 1 = chia 2 (làm tròn xuống). Bit sign được copy (sign extension).
+
+```java
+// 13 >> 2 = 1101 >> 2 = 0011 = 3
+int result = 13 >> 2;  // 13 / 4 = 3 (truncated)
+
+// Negative: -8 >> 1 = -4 (sign bit preserved)
+int neg = -8 >> 1;  // -4
+
+// Use case: Chia nhanh power of 2
+int half = n >> 1;      // n / 2
+int quarter = n >> 2;   // n / 4
+
+// Use case: Mid point (avoid overflow)
+int mid = (low + high) >>> 1;  // Safer than (low + high) / 2
+```
+
+#### # unsigned right shift (`>>>`) — dịch phải, thêm 0 bên trái (không giữ sign)
+
+```java
+// -1 >>> 1 = 0111...1111 = Integer.MAX_VALUE = 2147483647
+int result = -1 >>> 1;  // 2147483647
+
+// Difference: >> vs >>>
+// -8 >> 1  = -4   (sign extended: 1111...1000 >> 1 = 1111...1100)
+// -8 >>> 1 = 2147483644 (zero filled: 1111...1000 >>> 1 = 0111...1100)
+
+// Use case: Unsigned division by power of 2
+// Use case: Hash code distribution (HashMap internal)
+static int hash(Object key) {
+   int h;
+   return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
+   // XOR upper 16 bits with lower 16 bits → better distribution
+}
+```
+
+### # common bit manipulation tricks
+
+#### # check, set, clear, toggle specific bit
+
+```java
+// Position = 0-indexed from right (LSB = position 0)
+
+// CHECK if bit N is set
+boolean isSet = (value & (1 << n)) != 0;
+
+// SET bit N (turn on)
+value |= (1 << n);
+
+// CLEAR bit N (turn off)
+value &= ~(1 << n);
+
+// TOGGLE bit N (flip)
+value ^= (1 << n);
+
+// Example:
+int flags = 0b1010;  // bits 1 and 3 are set
+boolean bit2Set = (flags & (1 << 2)) != 0;  // false (bit 2 is 0)
+flags |= (1 << 2);   // flags = 0b1110 (set bit 2)
+flags &= ~(1 << 1);  // flags = 0b1100 (clear bit 1)
+flags ^= (1 << 3);   // flags = 0b0100 (toggle bit 3 off)
+```
+
+#### # power of 2 check
+
+```java
+// n là power of 2 khi chỉ có đúng 1 bit = 1
+// 8 = 1000, 8-1 = 0111 → 1000 & 0111 = 0000 → is power of 2
+boolean isPowerOf2 = n > 0 && (n & (n - 1)) == 0;
+
+// 6 = 0110, 6-1 = 0101 → 0110 & 0101 = 0100 ≠ 0 → NOT power of 2
+```
+
+#### # count set bits (population count)
+
+```java
+// Built-in (fastest — uses CPU instruction on modern hardware)
+int count = Integer.bitCount(n);
+
+// Manual (Brian Kernighan's algorithm)
+int count = 0;
+while (n != 0) {
+   n &= (n - 1);  // Clear lowest set bit
+   count++;
+}
+// n = 1011 → 1010 → 1000 → 0000 (3 iterations = 3 set bits)
+```
+
+#### # lowest/highest set bit
+
+```java
+// Lowest set bit (rightmost 1)
+int lowest = n & (-n);  // Isolate lowest set bit
+// 12 = 1100, -12 = 0100 (two's complement), 1100 & 0100 = 0100 = 4
+
+// Position of lowest set bit
+int pos = Integer.numberOfTrailingZeros(n);  // 12 → 2
+
+// Highest set bit position
+int pos = 31 - Integer.numberOfLeadingZeros(n);  // 12 → 3
+// Hoặc: Integer.highestOneBit(12) = 8 (bit value, not position)
+```
+
+### # real-world use cases trong java
+
+#### # use case 1: permission bitmask system
+
+```java
+public class Permission {
+   public static final int NONE    = 0;         // 0000 0000
+   public static final int READ    = 1 << 0;    // 0000 0001 = 1
+   public static final int WRITE   = 1 << 1;    // 0000 0010 = 2
+   public static final int DELETE  = 1 << 2;    // 0000 0100 = 4
+   public static final int ADMIN   = 1 << 3;    // 0000 1000 = 8
+   public static final int EXPORT  = 1 << 4;    // 0001 0000 = 16
+   public static final int IMPORT  = 1 << 5;    // 0010 0000 = 32
+
+   // Common combinations
+   public static final int EDITOR = READ | WRITE;            // 3
+   public static final int MANAGER = READ | WRITE | DELETE;  // 7
+   public static final int FULL = READ | WRITE | DELETE | ADMIN | EXPORT | IMPORT;  // 63
+
+   private int userPermissions;
+
+   public Permission(int permissions) {
+       this.userPermissions = permissions;
+   }
+
+   // Check permission
+   public boolean hasPermission(int permission) {
+       return (userPermissions & permission) == permission;
+   }
+
+   // Check ANY of given permissions
+   public boolean hasAny(int permissions) {
+       return (userPermissions & permissions) != 0;
+   }
+
+   // Grant permission
+   public void grant(int permission) {
+       userPermissions |= permission;
+   }
+
+   // Revoke permission
+   public void revoke(int permission) {
+       userPermissions &= ~permission;
+   }
+
+   // Toggle permission
+   public void toggle(int permission) {
+       userPermissions ^= permission;
+   }
+}
+
+// Usage:
+Permission user = new Permission(Permission.READ | Permission.WRITE);
+user.hasPermission(Permission.READ);    // true
+user.hasPermission(Permission.DELETE);   // false
+user.hasPermission(Permission.EDITOR);  // true (has both READ and WRITE)
+user.grant(Permission.DELETE);           // Now has READ | WRITE | DELETE
+user.revoke(Permission.WRITE);          // Now has READ | DELETE
+
+// Store in database as single integer column:
+// user_permissions INTEGER DEFAULT 0
+// Rất compact: 1 int lưu được 32 permissions thay vì 32 boolean columns
+```
+
+#### # use case 2: enumset — java's built-in bitmask for enums
+
+```java
+public enum Feature {
+   DARK_MODE,      // ordinal 0 → bit 0
+   NOTIFICATIONS,  // ordinal 1 → bit 1
+   ANALYTICS,      // ordinal 2 → bit 2
+   BETA_FEATURES,  // ordinal 3 → bit 3
+   TWO_FACTOR_AUTH // ordinal 4 → bit 4
+}
+// EnumSet internally uses bitmask (long for ≤64 enums)
+EnumSet<Feature> userFeatures = EnumSet.of(Feature.DARK_MODE, Feature.ANALYTICS);
+// Internal: 00101 (bits 0 and 2 set)
+
+userFeatures.add(Feature.NOTIFICATIONS);     // Internal: 00111
+userFeatures.contains(Feature.BETA_FEATURES); // false (bit 3 not set)
+userFeatures.remove(Feature.DARK_MODE);       // Internal: 00110
+
+// EnumSet operations = bitwise operations → O(1), extremely fast
+EnumSet<Feature> all = EnumSet.allOf(Feature.class);     // 11111
+EnumSet<Feature> none = EnumSet.noneOf(Feature.class);   // 00000
+EnumSet<Feature> complement = EnumSet.complementOf(userFeatures); // flip all
+```
+
+#### # use case 3: hashmap internal — bucket index calculation
+
+```java
+// HashMap uses bitwise AND instead of modulo for bucket index
+// Why? n & (capacity-1) is faster than n % capacity (when capacity is power of 2)
+
+// HashMap.putVal() simplified:
+int hash = hash(key);
+int index = hash & (table.length - 1);  // Equivalent to hash % table.length
+// But only works when table.length is power of 2 (which HashMap guarantees)
+
+// Example: capacity = 16, hash = 37
+// 37 % 16 = 5     (modulo — slow division)
+// 37 & 15 = 5     (bitwise AND — fast, no division)
+// 37 = 100101
+// 15 = 001111
+// &  = 000101 = 5 ✓
+
+// This is why HashMap capacity is ALWAYS power of 2
+// tableSizeFor(): rounds up to nearest power of 2
+static final int tableSizeFor(int cap) {
+   int n = cap - 1;
+   n |= n >>> 1;
+   n |= n >>> 2;
+   n |= n >>> 4;
+   n |= n >>> 8;
+   n |= n >>> 16;
+   return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+}
+```
+
+#### # use case 4: color manipulation (ARGB)
+
+```java
+// Color stored as 1 int: AAAA AAAA RRRR RRRR GGGG GGGG BBBB BBBB
+int color = 0xFF3366CC;  // Alpha=255, R=51, G=102, B=204
+
+// Extract components
+int alpha = (color >>> 24) & 0xFF;  // Shift right 24, mask lower 8 bits
+int red   = (color >>> 16) & 0xFF;  // Shift right 16, mask lower 8 bits
+int green = (color >>> 8) & 0xFF;   // Shift right 8, mask lower 8 bits
+int blue  = color & 0xFF;           // Mask lower 8 bits
+
+// Combine components back
+int newColor = (alpha << 24) | (red << 16) | (green << 8) | blue;
+
+// Darken color (multiply each channel by 0.7)
+int darken(int color) {
+   int a = (color >>> 24) & 0xFF;
+   int r = (int)(((color >>> 16) & 0xFF) * 0.7);
+   int g = (int)(((color >>> 8) & 0xFF) * 0.7);
+   int b = (int)((color & 0xFF) * 0.7);
+   return (a << 24) | (r << 16) | (g << 8) | b;
+}
+```
+
+#### # use case 5: network — subnet mask
+
+```java
+// IP Address: 192.168.1.100
+// Subnet Mask: 255.255.255.0 (/24)
+
+int ip = (192 << 24) | (168 << 16) | (1 << 8) | 100;
+int mask = 0xFFFFFF00;  // 255.255.255.0 = /24
+
+// Network address = IP AND mask
+int network = ip & mask;  // 192.168.1.0
+
+// Broadcast address = IP OR (~mask)
+int broadcast = ip | ~mask;  // 192.168.1.255
+
+// Check if 2 IPs are in same subnet
+boolean sameSubnet = (ip1 & mask) == (ip2 & mask);
+
+// Create mask from CIDR prefix length
+int createMask(int prefixLength) {
+   return prefixLength == 0 ? 0 : (0xFFFFFFFF << (32 - prefixLength));
+}
+// createMask(24) = 0xFFFFFF00 = 255.255.255.0
+// createMask(16) = 0xFFFF0000 = 255.255.0.0
+```
+
+### # bitwise vs arithmetic — performance
+
+Modern JVM/CPU thường optimize arithmetic → bitwise conversion tự động. **KHÔNG nên** sacrifice readability cho micro-optimization. Nhưng hiểu equivalences giúp đọc code người khác:
+
+```java
+// Equivalent operations (compiler often optimizes automatically):
+n * 2    ↔  n << 1
+n * 4    ↔  n << 2
+n * 8    ↔  n << 3
+n / 2    ↔  n >> 1     (for positive n; signed shift)
+n / 4    ↔  n >> 2
+n % 2    ↔  n & 1      (for positive n)
+n % 4    ↔  n & 3
+n % 8    ↔  n & 7
+n % 16   ↔  n & 15     (n % 2^k = n & (2^k - 1), khi n > 0)
+
+// Khi readability quan trọng hơn → dùng arithmetic
+// Khi performance critical (inner loop, millions iterations) → bitwise CÓ THỂ nhanh hơn
+// Khi viết framework/library internals → bitwise acceptable (HashMap, ConcurrentHashMap)
+```
+
+### # common interview problems
+
+#### # problem: single number (leetcode 136)
+
+Mọi số xuất hiện 2 lần, 1 số xuất hiện 1 lần. Tìm số đó.
+
+```java
+public int singleNumber(int[] nums) {
+   int result = 0;
+   for (int num : nums) {
+       result ^= num;  // Pairs cancel: x^x=0, remains: 0^unique=unique
+   }
+   return result;
+}
+// O(n) time, O(1) space — không thể tốt hơn
+```
+
+#### # problem: counting bits (leetcode 338)
+
+Cho n, trả array[i] = số bit 1 trong i (0 ≤ i ≤ n).
+
+```java
+public int[] countBits(int n) {
+   int[] dp = new int[n + 1];
+   for (int i = 1; i <= n; i++) {
+       dp[i] = dp[i >> 1] + (i & 1);
+       // i>>1 bỏ bit cuối → đã tính trước
+       // i&1 thêm bit cuối (0 hoặc 1)
+   }
+   return dp;
+}
+// O(n) time — mỗi element O(1)
+```
+
+#### # problem: reverse bits (leetcode 190)
+
+```java
+public int reverseBits(int n) {
+   int result = 0;
+   for (int i = 0; i < 32; i++) {
+       result = (result << 1) | (n & 1);  // Shift result left, add last bit of n
+       n >>>= 1;                           // Shift n right (unsigned)
+   }
+   return result;
+}
+```
+
+### # tóm tắt
+
+| Operator             | Symbol | Mnemonic              | Common Use                      |
+| -------------------- | ------ | --------------------- | ------------------------------- |
+| AND                  | `&`    | "Cả hai"              | Check/clear bits, mask          |
+| OR                   | `\|`   | "Ít nhất 1"           | Set bits, combine flags         |
+| XOR                  | `^`    | "Khác nhau"           | Toggle, find unique, swap       |
+| NOT                  | `~`    | "Đảo ngược"           | Invert mask                     |
+| Left Shift           | `<<`   | "Nhân 2^n"            | Create bit positions, multiply  |
+| Right Shift          | `>>`   | "Chia 2^n (signed)"   | Divide, sign-preserving         |
+| Unsigned Right Shift | `>>>`  | "Chia 2^n (unsigned)" | Hash distribution, unsigned ops |
+
+**Khi nào dùng bitwise trong production:**
+
+- Permission/flag systems (compact, fast check)
+- EnumSet (Java cung cấp sẵn)
+- Performance-critical inner loops
+- Network/protocol parsing
+- Hash functions, data structures internals
+
+**Khi nào KHÔNG dùng:**
+
+- Business logic thông thường (readability > performance)
+- Khi arithmetic equivalent rõ ràng hơn
+- Khi team không familiar (maintenance cost > performance gain)
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

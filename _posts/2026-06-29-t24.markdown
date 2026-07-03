@@ -1,0 +1,323 @@
+---
+layout: post
+title: "T24 - core banking"
+date: 2026-06-29 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, best-practices, vietnamese]
+---
+
+T24 - hay còn gọi là **Temenos Transact** là core banking system của Temenos - công ty Thụy Sĩ, vendor lớn nhất thế giới về
+phần mềm ngân hàng. Hơn 3,000 ngân hàng tại 150 quốc gia dùng sản phẩm Temenos, bao gồm nhiều ngân hàng lớn ở Việt Nam và Đông Nam Á.
+
+"Core banking" nghĩa là gì? Đây là hệ thống xử lý mọi giao dịch tài chính cốt lõi: mở tài khoản, gửi/rút tiền, chuyển khoản,
+cho vay, tính lãi, quản lý sổ cái. Nó là "source of truth" cho mọi data tài chính — tất cả channels (mobile app, internet
+banking, ATM, teller) đều đọc/ghi vào core banking.
+
+Tại sao developer cần hiểu T24?
+
+- Integrate digital channels (mobile banking, web) với T24
+- Build middleware/adapter giữa modern stack và T24
+- Hiểu data model và business logic mà core banking enforce
+- Debug production issues khi data flow qua T24
+
+### # kiến trúc t24
+
+T24 sinh ra từ thập niên 90 — kiến trúc khác xa `modern microservices`. Hiểu context lịch sử giúp bạn không "judge" nó bằng
+`modern standards` mà biết cách work with it.
+
+![t24-architecture](/assets/img/blog/t24/t24-architecture.png)
+
+#### # đặc điểm kiến trúc
+
+| Aspect        | T24                                                               | Modern comparison           |
+| ------------- | ----------------------------------------------------------------- | --------------------------- |
+| Language      | TAFJ (Java-based framework cho T24 logic) + proprietary scripting | Spring Boot Java            |
+| Database      | jBASE (NoSQL hash-file DB) hoặc Oracle/SQL Server                 | PostgreSQL/MongoDB          |
+| Data model    | Multi-value fields (1 field chứa nhiều giá trị)                   | Normalized tables           |
+| API           | OFS messages (text-based) + REST (newer)                          | REST/gRPC                   |
+| Batch         | COB (Close of Business) — nightly batch processing                | Event-driven/streaming      |
+| Customization | "Local routines" + "VERSION overrides"                            | Configuration + custom code |
+
+### # core concepts developer cần biết
+
+#### # applications & tables
+
+T24 tổ chức data theo "Applications" (tương đương bảng/collection):
+
+| Application    | Mô tả                               | Ví dụ ID        |
+| -------------- | ----------------------------------- | --------------- |
+| CUSTOMER       | Thông tin khách hàng                | CUS1234567      |
+| ACCOUNT        | Tài khoản (tiết kiệm, vãng lai)     | VN0010001234567 |
+| FUNDS.TRANSFER | Giao dịch chuyển khoản              | FT2024010112345 |
+| TELLER         | Giao dịch teller (gửi/rút)          | TT2024010100001 |
+| LIMIT          | Hạn mức tín dụng                    | LI000001234     |
+| AA.ARRANGEMENT | Arrangement Architecture (sản phẩm) | AA2024010100001 |
+| STMT.ENTRY     | Statement entries (sổ phụ)          | —               |
+
+#### # record id pattern
+
+![record-pattern](/assets/img/blog/t24/record-pattern.png)
+
+Mỗi `record` có `ID` unique, thường encode metadata:
+
+- FUNDS.TRANSFER ID: FT24010ABCDE
+  - FT: Prefix (application type)
+  - 24: Year
+  - 010: Julian day (Jan 10)
+  - ABCDE: Sequential/random suffix
+
+- ACCOUNT ID: VN0010001234567
+  - VN: Country
+  - 001: Branch code
+  - 0001234567: Sequential number
+
+#### # multi-value fields
+
+T24 dùng `jBASE` — NoSQL database với `multi-value` fields. Một field có thể chứa array of values, separated bởi special delimiters.
+Đây là concept xa lạ nhất với developer quen relational DB.
+
+CUSTOMER record (simplified):
+
+- ID: CUS1234567
+- MNEMONIC: NGUYENVANA
+- SHORT.NAME: "NGUYEN VAN A"
+- NAME.1: "NGUYEN VAN A" | "NGUYEN VAN A (Mr.)" ← Multi-value: 2 values
+- STREET: "123 Le Loi" | "Ward 1" ← Multi-value: 2 lines
+- PHONE.1: "0901234567" | "0281234567" ← Multi-value: 2 phones
+- RELATION.CODE: "SPOUSE" | "PARENT" ← Multi-value
+- REL.CUSTOMER: "CUS7654321" | "CUS9876543" ← Associated values
+
+Mapping to SQL equivalent:
+
+- CUSTOMER table + CUSTOMER_PHONES table + CUSTOMER_RELATIONS table
+- (normalized) vs T24 (all in 1 record with multi-values)
+
+#### # cob (close of business) — nightly batch
+
+Mỗi đêm, T24 chạy `COB`: tính lãi, apply charges, aging loans, generate statements, update balances.
+Đây là quá trình rất NẶNG — có thể mất 2-8 tiếng. Trong COB, system restricted (read-only hoặc offline).
+
+Ngày làm việc T24:
+
+- 08:00 - 17:00: Online processing (real-time transactions)
+- 17:00 - 18:00: Pre-COB (preparation, cut-off)
+- 18:00 - 02:00: COB running (batch: interest calc, aging, statements)
+- 02:00 - 08:00: Post-COB (system ready for next day)
+
+Business Date vs System Date:
+
+- T24 có concept "TODAY" = business date (may differ from system date)
+- Sau COB complete, TODAY advances to next business day
+- Weekend: TODAY stays Friday until Monday COB
+
+### # integration — cách kết nối với t24
+
+#### # ofs (open financial service) — legacy but still dominant
+
+OFS là text-based messaging protocol. Bạn gửi OFS message → T24 parse → execute → return response. Format human-readable nhưng verbose.
+
+```
+// OFS Request: Tạo chuyển khoản
+FUNDS.TRANSFER,CSP.INPUT/I/PROCESS,
+   TRANSACTION.TYPE::=AC,
+   DEBIT.ACCT.NO::=VN0010001234567,
+   DEBIT.AMOUNT::=5000000,
+   CREDIT.ACCT.NO::=VN0010009876543,
+   DEBIT.CURRENCY::=VND
+
+// OFS Response (success)
+FT2401050001/1
+
+// OFS Response (error)
+//FUNDS.TRANSFER,CSP.INPUT/I/PROCESS/-1,
+   DEBIT.ACCT.NO::=VN0010001234567:"INSUFFICIENT BALANCE"
+```
+
+#### # temenos connect / rest apis (modern)
+
+Temenos Transact (newer versions) expose REST APIs qua Temenos Connect:
+
+```java
+// Modern integration: REST call to T24
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class T24AccountService {
+
+   private final WebClient t24Client;
+
+   public AccountBalance getBalance(String accountId) {
+       return t24Client.get()
+           .uri("/api/v1/holdings/accounts/{accountId}", accountId)
+           .header("Authorization", "Bearer " + getServiceToken())
+           .retrieve()
+           .bodyToMono(T24AccountResponse.class)
+           .map(this::mapToBalance)
+           .block();
+   }
+
+   public TransferResult createTransfer(TransferRequest request) {
+       T24TransferPayload payload = T24TransferPayload.builder()
+           .debitAccountId(request.getFromAccount())
+           .creditAccountId(request.getToAccount())
+           .amount(request.getAmount())
+           .currency("VND")
+           .transactionType("AC")
+           .build();
+
+       return t24Client.post()
+           .uri("/api/v1/order/payments/transfers")
+           .bodyValue(payload)
+           .retrieve()
+           .onStatus(HttpStatusCode::is4xxClientError, response ->
+               response.bodyToMono(T24ErrorResponse.class)
+                   .flatMap(error -> Mono.error(
+                       new T24BusinessException(error.getErrorCode(), error.getMessage()))))
+           .bodyToMono(T24TransferResponse.class)
+           .map(this::mapToResult)
+           .block();
+   }
+}
+```
+
+#### # tafj (t24 application framework for java)
+
+TAFJ cho phép viết T24 routines bằng Java (thay vì proprietary language). Developer customize T24 behavior bằng Java classes deployed vào T24 runtime.
+
+```java
+// T24 Local Routine (runs INSIDE T24 engine)
+public class LR_ValidateTransfer extends LocalRoutine {
+
+   @Override
+   public void execute() {
+       String debitAccount = getFieldValue("DEBIT.ACCT.NO");
+       BigDecimal amount = new BigDecimal(getFieldValue("DEBIT.AMOUNT"));
+
+       // Custom business validation
+       if (amount.compareTo(new BigDecimal("10000000000")) > 0) {
+           setError("DEBIT.AMOUNT", "Amount exceeds single transaction limit");
+           return;
+       }
+
+       // Check sanctions
+       if (sanctionService.isBlocked(debitAccount)) {
+           setError("DEBIT.ACCT.NO", "Account is blocked by compliance");
+       }
+   }
+}
+```
+
+### # data model — hiểu cách t24 lưu data
+
+#### # account structure
+
+```
+ACCOUNT (tài khoản)
+├── ID: VN0010001234567
+├── CUSTOMER: CUS1234567 (link to customer)
+├── CATEGORY: 6001 (savings) / 1001 (current)
+├── CURRENCY: VND
+├── WORKING.BALANCE: 50,000,000 (available balance)
+├── ONLINE.ACTUAL.BAL: 55,000,000 (ledger balance, including holds)
+├── OPENING.DATE: 20200115
+├── ACCOUNT.TITLE.1: "NGUYEN VAN A - SAVINGS"
+└── INTEREST.RATE: 4.5 (annual %)
+
+Balances in T24:
+- WORKING.BALANCE = Available for withdrawal (after holds, blocks)
+- ONLINE.ACTUAL.BAL = Ledger balance (all posted transactions)
+- ONLINE.CLEARED.BAL = Cleared funds only (excluding uncleared cheques)
+```
+
+#### # transaction flow
+
+![transaction-flow](/assets/img/blog/t24/transaction-flow.png)
+
+- STMT.ENTRY (Statement Entry): Đây là các bản ghi hạch toán chi tiết. Khi ACCOUNT bị thay đổi số dư, T24 sẽ tự động sinh ra
+  các STMT.ENTRY tương ứng để phục vụ cho việc in sao kê và đối soát (Reconciliation) sau này.
+
+- Tính toàn vẹn dữ liệu (No state change): Trong cơ chế của T24 Core Engine, nếu bất kỳ bước kiểm tra nào thất bại hoặc
+  xảy ra lỗi hệ thống trong quá trình ghi (giai đoạn PASS), toàn bộ giao dịch sẽ bị ROLLBACK để đảm bảo tài khoản không bị trừ tiền oan.
+
+### # challenges khi integrate với t24
+
+| Challenge           | Vấn đề                              | Cách giải quyết                           |
+| ------------------- | ----------------------------------- | ----------------------------------------- |
+| Latency             | OFS calls: 200ms-2s per request     | Caching layer, batch queries              |
+| COB downtime        | 4-8 hours offline mỗi đêm           | Queue requests, retry after COB           |
+| Multi-value mapping | 1 field = N values, không type-safe | Robust parsing library, validation        |
+| Error messages      | Cryptic codes ("EB-ACCT.BAL.INSUF") | Error code mapping table                  |
+| Idempotency         | OFS không native idempotent         | Generate unique refs, check before submit |
+| Testing             | T24 environment limited, expensive  | Mock T24 responses, contract testing      |
+| Performance         | Concurrent OFS sessions limited     | Connection pooling, throttling            |
+| Data freshness      | Balances update after COB steps     | Real-time fields vs batch fields          |
+
+#### # middleware pattern (recommended)
+
+```
+Mobile App → API Gateway → [Your Middleware] → T24
+                               │
+                               ├── Cache (Redis): account info, rates
+                               ├── Queue (RabbitMQ): async operations
+                               ├── Transform: modern JSON ↔ OFS format
+                               ├── Retry: handle T24 timeouts
+                               ├── Circuit Breaker: handle T24 down
+                               └── Audit: log all T24 interactions
+```
+
+```java
+// Middleware service: abstracts T24 complexity from digital channels
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class AccountMiddlewareService {
+
+   private final T24Client t24Client;
+   private final RedisTemplate<String, AccountDTO> cache;
+   private final CircuitBreakerFactory circuitBreakerFactory;
+
+   private static final Duration CACHE_TTL = Duration.ofMinutes(5);
+
+   public AccountDTO getAccount(String accountId) {
+       // 1. Check cache first
+       AccountDTO cached = cache.opsForValue().get("account:" + accountId);
+       if (cached != null) return cached;
+
+       // 2. Call T24 with circuit breaker
+       CircuitBreaker cb = circuitBreakerFactory.create("t24-accounts");
+       AccountDTO account = cb.run(
+           () -> t24Client.getAccount(accountId),
+           throwable -> {
+               log.error("T24 unavailable for account: {}", accountId, throwable);
+               throw new CoreBankingUnavailableException("Cannot retrieve account");
+           }
+       );
+
+       // 3. Cache result
+       cache.opsForValue().set("account:" + accountId, account, CACHE_TTL);
+       return account;
+   }
+}
+```
+
+### # t24 trong context modern banking
+
+T24 là "old but gold" — xử lý correctly hàng tỷ giao dịch/ngày. Nhưng nó KHÔNG phải platform cho digital experiences. Modern stack wrap around T24:
+
+```
+User Experience Layer: Mobile/Web apps (React, Angular, Flutter)
+        │
+Engagement Layer: BFF, personalization, analytics (Spring Boot, Node.js)
+        │
+Integration Layer: API management, transformation, caching (Kong, Middleware)
+        │
+Core Banking: T24 (source of truth, transaction processing, compliance)
+```
+
+Xu hướng: Ngân hàng giữ T24 cho `"system of record"` (sổ cái, compliance, batch processing) nhưng build modern layers trên
+top cho `customer-facing features`. Dần dần, specific modules có thể migrate ra — payments qua modern payment hub, lending
+qua modern origination platform — nhưng T24 vẫn là backbone cho nhiều thập kỷ nữa.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

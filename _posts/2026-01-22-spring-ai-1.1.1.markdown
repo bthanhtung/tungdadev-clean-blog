@@ -1,0 +1,100 @@
+---
+layout: post
+title: "Spring AI 1.1.1"
+date: 2026-01-22 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, spring-ai, optimization, vietnamese]
+---
+
+Là một kỹ sư ngày đêm mài dũa Java công pháp. Ngoài những lúc đối mặt với mớ bug như rừng rậm `Hắc Mộc Nhai`,
+ta thường say mê những pho bí kíp kiếm hiệp của Kim gia. Nay, giữa lúc võ lâm công nghệ đang chao đảo bởi
+luồng chân khí `Generative AI`, Spring Framework đã tung ra một bộ tâm pháp mới: `Spring AI v1.1.1`.
+
+Kẻ thức thời mới là trang tuấn kiệt. Nếu không muốn bị bỏ lại phía sau như những kẻ luyện sai tâm pháp,
+hãy cùng ta khám phá bộ `Độc Cô Cửu Kiếm` của giới Java này.
+
+### # khẩu quyết tâm pháp
+
+Nếu coi việc xây dựng ứng dụng AI là luyện tập nội công, thì các LLM (Large Language Models) như GPT-4 hay Gemini
+chính là những "huyết thanh" tăng cường công lực. Tuy nhiên, nếu không có bộ khung điều phối, kinh mạch sẽ dễ bị đảo lộn (code rối rắm, khó bảo trì).
+
+Spring AI đóng vai trò là bộ khung xương, giúp các Java Developer "thuần phục" các mô hình AI một cách chính tông nhất.
+Phiên bản 1.1.1 mang đến sự ổn định tuyệt đối và khả năng kết nối vạn năng.
+
+### # các thức trong Spring AI (Core Concepts)
+
+Trong bộ kiếm pháp này, có 3 chiêu thức trọng yếu mà các chư vị cần nắm vững:
+
+- _**ModelClient (kiếm ý)**_: giao diện thống nhất để triệu hồi các AI model. Dù là OpenAI, Azure hay Google Vertex AI, chỉ cần thay đổi "kiếm quyết" (config), chiêu thức vẫn uyển chuyển như cũ.
+- _**Prompts (chiêu thức)**_: cách các vị đưa ra khẩu lệnh cho AI. Spring AI hỗ trợ Template, giúp tạo ra các lời dẫn tinh tế như lời đối đáp của Lệnh Hồ Xung.
+- _**RAG - Retrieval Augmented Generation (nội công)**_: đây là tuyệt học giúp AI không "nói sảng". Nó kết hợp giữa kiến thức của mô hình và dữ liệu mật tịch của riêng doanh nghiệp bạn.
+
+### # lập trận "tiếu ngạo AI"
+
+Để các vị dễ hình dung, chúng ta sẽ cùng xây dựng một mô phỏng đơn giản: Một `"Cố vấn võ lâm"` dùng Gemini để giải đáp thắc mắc về kiếm hiệp.
+
+#### # bước 1: khởi tạo trận pháp (dependencies)
+
+Thêm vào `pom.xml` như cách chuẩn bị binh khí trước giờ giao chiến:
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-google-vertex-ai-gemini-spring-boot-starter</artifactId>
+    <version>1.1.1</version>
+</dependency>
+```
+
+#### # bước 2: thiết lập tâm pháp (configuration)
+
+Cấu hình API Key trong `application.yml`:
+
+```yaml
+spring:
+  ai:
+    vertex:
+      ai:
+        gemini:
+          api-key: spring-ai-your-google-vertex-ai-api-key
+          model: 'gemini-1.5-pro'
+```
+
+### # bước 3: xuất chiêu (service)
+
+Hãy tạo một class để giao tiếp với AI. Chúng ta sử dụng `ChatClient` - một "thanh bảo kiếm" cực kỳ linh hoạt trong bản `1.1.1`.
+
+```java
+@Service
+public class KieuPhongService {
+
+    private final ChatClient chatClient;
+
+    public KieuPhongService(ChatClient.Builder builder) {
+        // Thiết lập "khí chất" cho AI ngay từ đầu
+        this.chatClient = builder
+                .defaultSystem("Ngươi là một hiện thân của Kiều Phong, chuyên hành hiệp trượng nghĩa, cứu giúp người yếu thế")
+                .build();
+    }
+
+    public String hanhDong(String xuatChieu) {
+        return chatClient.prompt()
+                .user(xuatChieu)
+                .call()
+                .content();
+    }
+}
+```
+
+### # lời kết
+
+`Spring AI 1.1.1` không chỉ là một thư viện, nó là `"Cửu Dương Thần Công"` giúp Java Developer bảo toàn chân khí trong kỷ nguyên AI.
+Việc tích hợp trở nên thanh thoát, không còn cảnh `"tẩu hỏa nhập ma"` khi phải xử lý hàng tá JSON phức tạp.
+
+Spring AI là nền tảng cơ bản để bắt đầu làm quen với AI trong hệ sinh thái Java. Với sự hỗ trợ từ các mô hình LLM hàng đầu,
+các đồng đạo có thể tự tin bước vào thế giới AI mà không lo ngại về sự phức tạp.
+
+Các đồng đạo hãy nhớ: Code cũng như kiếm, quan trọng không phải ở chiêu thức hoa mỹ, mà là ở sự tinh tế và hiệu quả.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

@@ -1,0 +1,386 @@
+---
+layout: post
+title: "keycloak new"
+date: 2026-02-30 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, keycloak, best-practices, vietnamese]
+---
+
+Trong bức tranh kiến trúc phần mềm hiện đại, việc để các dịch vụ tự lo liệu bài toán xác thực (Authentication) và phân quyền (Authorization) giống như việc mỗi căn nhà trong thành phố phải tự xây dựng một nhà máy phát điện riêng. Nó cồng kềnh, rủi ro và phá vỡ nguyên tắc tối giản (Danshari) trong việc thiết kế hệ thống.
+
+Để giữ cho Business Logic được "sạch" (Clean Architecture) và tập trung hoàn toàn vào giá trị cốt lõi, việc ủy quyền toàn bộ gánh nặng bảo mật cho một hệ thống Quản lý Định danh và Truy cập (IAM) chuyên biệt là điều tất yếu. Và trong thế giới mã nguồn mở, Keycloak chính là "người gác đền" vững chãi nhất.
+
+Bài viết này sẽ bóc tách Keycloak từ bản chất kiến trúc, vòng đời của những luồng xác thực, cho đến cách hiện thực hóa chúng trong một hệ sinh thái Spring Boot.
+
+### # bản chất
+
+Keycloak không chỉ là một công cụ, nó là một giải pháp Identity and Access Management (IAM) toàn diện. Bằng việc hỗ trợ các giao thức chuẩn công nghiệp như OpenID Connect (OIDC), OAuth 2.0, và SAML 2.0, Keycloak gánh vác toàn bộ nghiệp vụ:
+
+- Đăng nhập một lần (Single Sign-On - SSO).
+- Đồng bộ người dùng (User Federation qua LDAP, Active Directory).
+- Môi giới định danh (Identity Brokering với Google, GitHub, Facebook...).
+
+Mục tiêu tối thượng: Ứng dụng của bạn không cần và không nên lưu trữ mật khẩu hay tự viết logic mã hóa bảo mật.
+
+## Kiến trúc
+
+Một hệ thống phân tán cần sự rành mạch. Keycloak tổ chức dữ liệu theo một kiến trúc đa tầng (Multi-tenancy) rất chặt chẽ, nơi mỗi thành phần đều có ranh giới rõ ràng.
+
+![keycloak-system](/assets/img/blog/keycloak/keycloak-system.png)
+
+### # core concepts
+
+Để giao tiếp trôi chảy với Keycloak, chúng ta cần nắm vững các định nghĩa sau:
+| Concept | Mô tả |
+| ------- | ------------------------------------------------------- |
+| Realm | Môi trường biệt lập (Tenant). Một Realm chứa toàn bộ người dùng, ứng dụng, và các quy tắc bảo mật riêng. Realm master chỉ dành riêng cho việc quản trị hệ thống Keycloak. |
+| Client | Bất kỳ thực thể nào (Frontend SPA, Mobile App, Backend Service) muốn giao tiếp và yêu cầu xác thực từ Keycloak. |
+| User | Thực thể con người (End-user) thao tác trên hệ thống. |
+| Role | Quyền hạn được gán. Có thể gán ở mức toàn cục (Realm Role) hoặc giới hạn trong một ứng dụng cụ thể (Client Role). |
+| Group | Tập hợp các Users. Thay vì gán Role cho từng User (dễ sai sót), ta gán Role cho Group, User sẽ kế thừa các quyền này một cách có tổ chức. |
+| Scope | Phạm vi quyền hạn mà Client yêu cầu Keycloak cấp phép. |
+| Token | Chìa khóa kỹ thuật số (JWT) bao gồm Access Token, Refresh Token, và ID Token. |
+| Session | User login session (SSO) |
+
+### # oauth 2.0 / oidc flows
+
+Sự tinh tế của hệ thống nằm ở việc chọn đúng luồng (flow) cho đúng đối tượng.
+
+#### # authorization code flow (frontend apps)
+
+Đây là luồng tiêu chuẩn và bảo mật nhất cho các ứng dụng có giao diện (SPA, Mobile). Mọi thao tác xác thực mật khẩu diễn ra hoàn toàn trên lãnh địa của Keycloak.
+
+```
+1. User → Frontend: Click "Login"
+2. Frontend → Keycloak: Redirect to /auth (with client_id, redirect_uri)
+3. Keycloak → User: Show login page
+4. User → Keycloak: Enter credentials
+5. Keycloak → Frontend: Redirect back with authorization code
+6. Frontend → Keycloak: Exchange code for tokens (POST /token)
+7. Keycloak → Frontend: Return access_token + refresh_token + id_token
+8. Frontend → Backend: API call with Bearer access_token
+9. Backend: Validate JWT (signature, expiry, issuer, roles)
+```
+
+#### # client credentials flow (service-to-service)
+
+Khi các microservices nói chuyện với nhau, không có con người ở giữa. Chúng dùng "căn cước" riêng của mình.
+
+![credentials-flow](/assets/img/blog/keycloak/credentials-flow.png)
+
+### # jwt token structure
+
+Access Token thực chất là một chuỗi JSON Web Token (JWT). Việc hiểu rõ cấu trúc payload giúp chúng ta thiết kế các cơ chế kiểm soát truy cập mịn màng (fine-grained authorization).
+
+```json
+{
+  "exp": 1705312800,
+  "iat": 1705312500,
+  "iss": "http://keycloak:8080/realms/csp", // Nguồn cội cấp phát
+  "sub": "user-uuid-123", // Định danh duy nhất của User
+  "typ": "Bearer",
+  "azp": "csp-frontend", // Client nào đã xin token này
+  "preferred_username": "john.doe",
+  "email": "john@example.com",
+
+  // Quyền hạn cấp toàn hệ thống (Realm)
+  "realm_access": {
+    "roles": ["user", "admin"]
+  },
+
+  // Quyền hạn cấp riêng biệt cho từng Client (Resource)
+  "resource_access": {
+    "order-service": {
+      "roles": ["order_read", "order_write"]
+    }
+  }
+}
+```
+
+Lưu ý về Vòng đời Token:
+
+- Access Token: Cần có tuổi thọ rất ngắn (5-15 phút) để giảm thiểu rủi ro khi bị lộ. Nó hoàn toàn Stateless và không thể thu hồi ngang xương (trừ khi dùng Token Introspection, nhưng sẽ làm mất đi ưu điểm hiệu năng).
+- Refresh Token: Tuổi thọ dài hơn (vài giờ). Dùng để đổi Access Token mới khi cái cũ hết hạn. Có thể thu hồi (Revocable) thông qua quản lý Session trên Keycloak.
+- ID Token: Chỉ dùng cho Frontend để đọc thông tin hiển thị (tên, avatar), tuyệt đối không dùng để xác thực các lời gọi API.
+
+### # spring boot integration (resource server)
+
+Trong kiến trúc Clean Architecture, Security nằm ở lớp Infrastructure (tầng ngoài cùng). Nó bảo vệ các lớp bên trong (Application, Domain) khỏi các request trái phép mà không làm vấy bẩn business logic.
+
+#### # config
+
+Spring Boot sẽ tự động cấu hình các filter cần thiết dựa trên địa chỉ (issuer-uri) của Keycloak.
+
+```yaml
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Spring Boot sẽ gọi đến điểm well-known (.well-known/openid-configuration)
+          # để tự động lấy Public Keys (JWKS) dùng cho việc xác thực chữ ký token.
+          issuer-uri: http://keycloak:8080/realms/csp
+```
+
+#### # security config
+
+Do Keycloak thiết kế payload với các cấu trúc `realm_access` và `resource_access` lồng nhau, ta cần một Converter tùy chỉnh để Spring Security có thể hiểu và map chúng thành các `GrantedAuthority`.
+
+```java
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable()) // Stateless APIs không cần CSRF
+            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/**").authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(keycloakJwtConverter()))
+            );
+        return http.build();
+    }
+
+    private JwtAuthenticationConverter keycloakJwtConverter() {
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+            List<GrantedAuthority> authorities = new ArrayList<>();
+
+            // 1. Phân tách các Realm Roles
+            Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
+            if (realmAccess != null) {
+                List<String> roles = (List<String>) realmAccess.get("roles");
+                roles.forEach(role ->
+                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase())));
+            }
+
+            // 2. Phân tách các Client Roles (Tùy chọn cho độ mịn cao hơn)
+            Map<String, Object> resourceAccess = jwt.getClaimAsMap("resource_access");
+            if (resourceAccess != null) {
+                Map<String, Object> clientAccess = (Map<String, Object>) resourceAccess.get("order-service");
+                if (clientAccess != null) {
+                    List<String> clientRoles = (List<String>) clientAccess.get("roles");
+                    clientRoles.forEach(role ->
+                        authorities.add(new SimpleGrantedAuthority(role)));
+                }
+            }
+
+            return authorities;
+        });
+        return converter;
+    }
+}
+```
+
+### # keycloak admin client (java)
+
+Trong nhiều dự án thực tế, việc quản trị User không chỉ giới hạn ở giao diện Admin Console mà cần được tự động hóa (ví dụ: tạo tài khoản ngay khi user đăng ký trên ứng dụng của bạn). Keycloak cung cấp thư viện để thao tác programmatically.
+
+```java
+@Service
+public class KeycloakAdminService {
+
+   private final Keycloak keycloak;
+
+   public KeycloakAdminService(@Value("${keycloak.admin.url}") String url,
+                                @Value("${keycloak.admin.realm}") String realm,
+                                @Value("${keycloak.admin.client-id}") String clientId,
+                                @Value("${keycloak.admin.client-secret}") String secret) {
+       this.keycloak = KeycloakBuilder.builder()
+           .serverUrl(url)
+           .realm(realm)
+           .clientId(clientId)
+           .clientSecret(secret)
+           .grantType(OAuth2Constants.CLIENT_CREDENTIALS)
+           .build();
+   }
+
+   // Create user
+   public String createUser(String realm, String username, String email, String password) {
+       UserRepresentation user = new UserRepresentation();
+       user.setUsername(username);
+       user.setEmail(email);
+       user.setEnabled(true);
+       user.setEmailVerified(true);
+
+       CredentialRepresentation credential = new CredentialRepresentation();
+       credential.setType(CredentialRepresentation.PASSWORD);
+       credential.setValue(password);
+       credential.setTemporary(false);
+       user.setCredentials(List.of(credential));
+
+       Response response = keycloak.realm(realm).users().create(user);
+       String userId = CreatedResponseUtil.getCreatedId(response);
+       return userId;
+   }
+
+   // Assign role to user
+   public void assignRole(String realm, String userId, String roleName) {
+       RoleRepresentation role = keycloak.realm(realm).roles().get(roleName).toRepresentation();
+       keycloak.realm(realm).users().get(userId).roles().realmLevel()
+           .add(List.of(role));
+   }
+
+   // Get user by email
+   public UserRepresentation getUserByEmail(String realm, String email) {
+       List<UserRepresentation> users = keycloak.realm(realm).users()
+           .searchByEmail(email, true);
+       return users.isEmpty() ? null : users.get(0);
+   }
+
+   // Disable user
+   public void disableUser(String realm, String userId) {
+       UserRepresentation user = keycloak.realm(realm).users().get(userId).toRepresentation();
+       user.setEnabled(false);
+       keycloak.realm(realm).users().get(userId).update(user);
+   }
+}
+```
+
+### # realm configuration
+
+#### # client setup (for backend service)
+
+```json
+{
+  "clientId": "order-service",
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "serviceAccountsEnabled": true,
+  "authorizationServicesEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "standardFlowEnabled": false,
+  "clientAuthenticatorType": "client-secret"
+}
+```
+
+#### # client setup (for frontend spa)
+
+```json
+{
+  "clientId": "csp-frontend",
+  "protocol": "openid-connect",
+  "publicClient": true,
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "redirectUris": ["http://localhost:3000/*", "https://app.example.com/*"],
+  "webOrigins": ["http://localhost:3000", "https://app.example.com"]
+}
+```
+
+### # token lifecycle
+
+![token-lifecycle](/assets/img/blog/keycloak/token-lifecycle.png)
+
+```
+Access Token (short-lived: 5-15 min)
+ → Used for API calls
+ → Validated by resource server (signature + expiry)
+ → NOT revocable (stateless)
+
+Refresh Token (long-lived: 30 min - 8 hours)
+ → Used to get new access token
+ → Stored securely (httpOnly cookie or secure storage)
+ → Revocable (Keycloak tracks sessions)
+
+ID Token (for frontend)
+ → Contains user info (name, email, roles)
+ → Used by frontend to display user data
+ → NOT sent to backend APIs
+```
+
+#### # token refresh flow
+
+![token-refresh](/assets/img/blog/keycloak/token-refresh.png)
+
+### # service-to-service authentication
+
+```java
+// Service A calls Service B using client credentials
+@Service
+public class ServiceBClient {
+
+   private final WebClient webClient;
+   private final OAuth2AuthorizedClientManager clientManager;
+
+   public Object callServiceB() {
+       // Auto-fetches token using client credentials
+       return webClient.get()
+           .uri("http://service-b/api/data")
+           .attributes(clientRegistrationId("service-b"))
+           .retrieve()
+           .bodyToMono(Object.class)
+           .block();
+   }
+}
+```
+
+Hoặc manual token fetch:
+
+```java
+public String getServiceToken() {
+   MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
+   params.add("grant_type", "client_credentials");
+   params.add("client_id", clientId);
+   params.add("client_secret", clientSecret);
+
+   TokenResponse response = restTemplate.postForObject(
+       keycloakUrl + "/realms/csp/protocol/openid-connect/token",
+       params, TokenResponse.class);
+
+   return response.getAccessToken();
+}
+```
+
+## Event Listeners
+
+Việc giám sát (Observability) là bắt buộc. Hệ thống cần biết ai đang đăng nhập, ai đang cố gắng brute-force. Bằng việc custom EventListenerProvider, bạn có thể đẩy các sự kiện này vào hệ thống Log tập trung hoặc Kafka để phân tích luồng dữ liệu bảo mật.
+
+```java
+public class CustomEventListener implements EventListenerProvider {
+
+    @Override
+    public void onEvent(Event event) {
+        if (event.getType() == EventType.LOGIN) {
+            log.info("Xác thực thành công | userId={} | ip={}",
+                event.getUserId(), event.getIpAddress());
+        }
+        if (event.getType() == EventType.LOGIN_ERROR) {
+            log.warn("Cảnh báo bất thường: Thất bại xác thực | userId={} | error={}",
+                event.getUserId(), event.getError());
+            // Có thể emit event ra Kafka để hệ thống Fraud Detection xử lý
+        }
+    }
+
+    @Override
+    public void onEvent(AdminEvent event, boolean includeRepresentation) {
+        // Lắng nghe các thay đổi về cấu hình từ Admin
+    }
+}
+```
+
+### # production checklist
+
+Trước khi đưa một cụm Keycloak ra ánh sáng (Production), hãy chắc chắn rằng bạn đã duyệt qua các tiêu chuẩn khắt khe sau:
+
+- [ ] Phân mảnh cấu trúc (Isolation): Mỗi môi trường/tenant phải nằm trên một Realm riêng biệt. Không dùng chung.
+- [ ] Vòng đời Token ngắn: Access Token (5-15 phút) kết hợp với cơ chế Refresh Token Rotation.
+- [ ] Bảo vệ phòng thủ: Bật tính năng Brute Force Detection để khóa tài khoản tự động khi phát hiện tấn công.
+- [ ] Hạ tầng bền vững: Sử dụng Database lõi (PostgreSQL/MySQL), tuyệt đối không dùng H2 In-memory cho Production.
+- [ ] Sẵn sàng cao (HA): Cấu hình Clustering sử dụng bộ đệm Infinispan phân tán.
+- [ ] Bảo mật kết nối: Bắt buộc sử dụng HTTPS (Terminate TLS tại Load Balancer/Nginx). Chặn IP truy cập vào Admin Console từ mạng Public.
+- [ ] Quản trị rủi ro: Lên lịch rotate (xoay vòng) Token Signing Keys định kỳ và cấu hình tự động export/backup Realm.
+- [ ] Giao diện đồng nhất: Triển khai Custom Themes để trang Login ăn khớp hoàn toàn với nhận diện thương hiệu của dự án.
+
+Làm chủ được Keycloak không chỉ là việc gọi đúng API hay cấu hình đúng thông số, mà là việc thiết lập được một tư duy kiến trúc mạch lạc, nơi tính an toàn được đảm bảo ngay từ gốc rễ, nhường lại khoảng không gian tự do tối đa cho sự phát triển của các luồng nghiệp vụ kinh doanh.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

@@ -1,0 +1,1605 @@
+---
+layout: post
+title: "grpc"
+date: 2025-12-25 19:29:39 +0700
+categories: [Software Development]
+tags: [java, grpc, software-development, vietnamese]
+---
+
+> _"Nếu REST là con đường quốc lộ quen thuộc, thì gRPC là đường cao tốc — nhanh hơn, hiệu quả hơn, nhưng cần biết cách lái."_
+>
+> — Một Google Engineer nào đó, trong buổi tech talk lúc 2 giờ sáng.
+
+---
+
+### # gRPC là gì? tại sao google tạo ra nó?
+
+#### # câu chuyện bắt đầu từ bên trong google
+
+Trước khi gRPC ra đời, Google đã sử dụng một hệ thống RPC nội bộ gọi là **Stubby** suốt hơn 15 năm. Stubby xử lý **hàng tỷ request mỗi giây** giữa các service nội bộ — từ Search, YouTube cho đến Gmail. Nó nhanh, hiệu quả, nhưng có một vấn đề: nó gắn chặt với infrastructure của Google và không thể open-source.
+
+Năm 2015, Google quyết định xây dựng lại Stubby từ đầu, dựa trên các chuẩn mở như HTTP/2, và phát hành nó dưới tên **gRPC** (gRPC Remote Procedure Call — vâng, chữ "g" là đệ quy, rất Google style 😄).
+
+#### # định nghĩa chính thức
+
+**gRPC** là một framework RPC (Remote Procedure Call) hiệu năng cao, open-source, được thiết kế để cho phép các service giao tiếp với nhau một cách hiệu quả, bất kể chúng được viết bằng ngôn ngữ gì hay chạy ở đâu.
+
+Nói đơn giản: gRPC cho phép bạn **gọi một function trên server khác như thể nó nằm ngay trong code của bạn**.
+
+![grpc-call](/assets/img/blog/grpc/grpc-call.png)
+
+Bạn gọi `orderService.getOrder(orderId)` ở client Java và nó thực sự chạy logic trên server Python. Client không cần biết server viết bằng gì — gRPC lo hết.
+
+#### # các đặc điểm cốt lõi
+
+| Đặc điểm             | Mô tả                                                      |
+| -------------------- | ---------------------------------------------------------- |
+| **HTTP/2**           | Multiplexing, header compression, bidirectional streaming  |
+| **Protocol Buffers** | Binary serialization — nhỏ hơn JSON 3-10 lần               |
+| **Contract-first**   | Định nghĩa API bằng `.proto` file trước, code generate sau |
+| **Polyglot**         | Hỗ trợ 11+ ngôn ngữ: Java, Go, Python, C++, Rust, ...      |
+| **Streaming**        | Hỗ trợ 4 kiểu communication pattern                        |
+| **Deadline/Timeout** | Built-in mechanism cho timeout propagation                 |
+| **Interceptors**     | Middleware pattern cho cross-cutting concerns              |
+
+---
+
+### # kiến trúc & cách hoạt động bên trong
+
+#### # luồng hoạt động từ A đến Z
+
+Hãy trace một gRPC call từ đầu đến cuối:
+
+![grpc-flow](/assets/img/blog/grpc/grpc-flow.png)
+
+#### # bước 1: định nghĩa contract (.proto)
+
+Mọi thứ bắt đầu từ file `.proto`. Đây là "hợp đồng" giữa client và server:
+
+```protobuf
+syntax = "proto3";
+
+package com.example.order;
+
+option java_multiple_files = true;
+option java_package = "com.example.order.grpc";
+
+service OrderService {
+  rpc GetOrder (GetOrderRequest) returns (OrderResponse);
+  rpc CreateOrder (CreateOrderRequest) returns (OrderResponse);
+  rpc ListOrders (ListOrdersRequest) returns (stream OrderResponse);
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message CreateOrderRequest {
+  string customer_id = 1;
+  repeated OrderItem items = 2;
+  string shipping_address = 3;
+}
+
+message OrderItem {
+  string product_id = 1;
+  int32 quantity = 2;
+  double price = 3;
+}
+
+message OrderResponse {
+  string order_id = 1;
+  string customer_id = 2;
+  repeated OrderItem items = 3;
+  OrderStatus status = 4;
+  double total_amount = 5;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  CONFIRMED = 2;
+  SHIPPED = 3;
+  DELIVERED = 4;
+  CANCELLED = 5;
+}
+```
+
+Mỗi field có một **số thứ tự** (field number) — đây là cách protobuf identify field trong binary format, không phải bằng tên. Điều này cho phép bạn **rename field mà không break backward compatibility**.
+
+#### # bước 2: code generation
+
+Khi bạn chạy `protoc` compiler, nó sẽ generate ra:
+
+- **Message classes**: Java POJOs với builder pattern cho mỗi message
+- **Client Stub**: Class để gọi remote methods
+- **Server Base class**: Abstract class mà bạn implement logic
+
+#### # bước 3: serialization với protocol buffers
+
+Khi client gọi `getOrder()`:
+
+1. Request object được **serialize thành binary** bằng protobuf
+2. Binary data được đóng gói trong **HTTP/2 frame**
+3. Gửi qua network
+4. Server **deserialize** binary thành object
+5. Xử lý logic, tạo response
+6. Response serialize → binary → HTTP/2 frame → client
+7. Client deserialize → response object
+
+#### # tại sao http/2 quan trọng?
+
+HTTP/1.1 có vấn đề **head-of-line blocking** — mỗi connection chỉ xử lý 1 request tại một thời điểm. HTTP/2 giải quyết điều này:
+
+![grpc-http2](/assets/img/blog/grpc/grpc-http2.png)
+
+- **Multiplexing**: Nhiều request/response song song trên 1 connection
+- **Header compression** (HPACK): Giảm overhead cho repeated headers
+- **Server push**: Server có thể gửi data mà client chưa request
+- **Binary framing**: Hiệu quả hơn text-based HTTP/1.1
+
+### # protocol buffers — ngôn ngữ chung của gRPC
+
+#### # binary vs text: cuộc chiến hiệu năng
+
+Hãy so sánh cùng một data:
+
+**JSON (REST) — ~180 bytes:**
+
+```json
+{
+  "orderId": "ORD-12345",
+  "customerId": "CUST-789",
+  "items": [
+    {
+      "productId": "PROD-001",
+      "quantity": 2,
+      "price": 29.99
+    }
+  ],
+  "status": "CONFIRMED",
+  "totalAmount": 59.98
+}
+```
+
+**Protocol Buffers (gRPC) — ~45 bytes:**
+
+```
+Binary: 0A 0B 4F 52 44 2D 31 32 33 34 35 12 08 ...
+```
+
+→ **Nhỏ hơn ~4 lần**, serialize/deserialize **nhanh hơn 5-10 lần** so với JSON.
+
+#### # proto3 syntax cheat sheet
+
+```protobuf
+syntax = "proto3";
+
+// Scalar types
+message Example {
+  double latitude = 1;       // 64-bit float
+  float score = 2;           // 32-bit float
+  int32 age = 3;             // Variable-length encoding
+  int64 timestamp = 4;       // Variable-length encoding
+  bool is_active = 5;        // Boolean
+  string name = 6;           // UTF-8 string
+  bytes avatar = 7;          // Arbitrary byte data
+}
+
+// Collections
+message Cart {
+  repeated CartItem items = 1;          // List<CartItem>
+  map<string, int32> quantities = 2;    // Map<String, Integer>
+}
+
+// Nested messages
+message Address {
+  message GeoPoint {
+    double lat = 1;
+    double lng = 2;
+  }
+  string street = 1;
+  string city = 2;
+  GeoPoint location = 3;
+}
+
+// Oneof — chỉ 1 field được set tại một thời điểm
+message Payment {
+  oneof method {
+    CreditCard credit_card = 1;
+    BankTransfer bank_transfer = 2;
+    Wallet wallet = 3;
+  }
+}
+
+// Optional — phân biệt "not set" vs "default value"
+message Filter {
+  optional int32 min_price = 1;  // có thể check hasMinPrice()
+  optional int32 max_price = 2;
+}
+
+// Well-known types
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
+
+message Event {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Duration ttl = 2;
+  google.protobuf.StringValue nullable_name = 3;
+}
+```
+
+#### # quy tắc vàng khi thiết kế proto
+
+1. **Không bao giờ thay đổi field number** của field đã tồn tại
+2. **Không bao giờ reuse field number** đã bị xóa — dùng `reserved`:
+
+```protobuf
+message Order {
+  reserved 4, 8;
+  reserved "old_status", "legacy";
+}
+```
+
+3. **Enum phải có value 0** là UNSPECIFIED
+4. **Dùng wrapper types** khi cần phân biệt null vs default value
+5. **Đặt tên theo snake_case** cho field, PascalCase cho message và service
+
+### # bốn communication patterns
+
+gRPC hỗ trợ 4 kiểu giao tiếp — đây là điểm mạnh vượt trội so với REST:
+
+#### # pattern 1: unary RPC (request-response)
+
+Giống REST truyền thống — 1 request, 1 response.
+
+```protobuf
+rpc GetOrder (GetOrderRequest) returns (OrderResponse);
+```
+
+![protobuf-client-server](/assets/img/blog/grpc/protobuf-client-server.png)
+
+**Use case**: CRUD operations, authentication, simple queries.
+
+#### # pattern 2: server streaming rpc
+
+Client gửi 1 request, server trả về một stream of responses.
+
+```protobuf
+rpc ListOrders (ListOrdersRequest) returns (stream OrderResponse);
+```
+
+![protobuf-client-server-stream](/assets/img/blog/grpc/protobuf-client-server-stream.png)
+
+**Use case**: Real-time feeds, downloading large datasets, live notifications.
+
+#### # pattern 3: client streaming rpc
+
+Client gửi một stream of requests, server trả về 1 response khi stream kết thúc.
+
+```protobuf
+rpc UploadOrderItems (stream OrderItem) returns (UploadSummary);
+```
+
+![protobuf-rpc](/assets/img/blog/grpc/protobuf-rpc.png)
+
+**Use case**: File upload, batch processing, IoT sensor data collection.
+
+#### # pattern 4: bidirectional streaming rpc
+
+Cả client và server đều gửi stream — hoàn toàn độc lập với nhau.
+
+```protobuf
+rpc OrderChat (stream ChatMessage) returns (stream ChatMessage);
+```
+
+![protobuf-rpc-msg](/assets/img/blog/grpc/protobuf-rpc-msg.png)
+
+**Use case**: Chat, real-time collaboration, gaming, live dashboards.
+
+### # so sánh gRPC vs REST vs GraphQL
+
+| Tiêu chí            | gRPC                  | REST                  | GraphQL           |
+| ------------------- | --------------------- | --------------------- | ----------------- |
+| **Protocol**        | HTTP/2                | HTTP/1.1 (thường)     | HTTP/1.1          |
+| **Data format**     | Protobuf (binary)     | JSON (text)           | JSON (text)       |
+| **Contract**        | `.proto` file         | OpenAPI/Swagger       | Schema            |
+| **Code generation** | Built-in, đa ngôn ngữ | Third-party tools     | Third-party tools |
+| **Streaming**       | 4 patterns native     | Không (cần WebSocket) | Subscriptions     |
+| **Browser support** | Cần gRPC-Web proxy    | Native                | Native            |
+| **Performance**     | ⚡ Rất nhanh          | 🐢 Chậm hơn           | 🐢 Chậm hơn       |
+| **Payload size**    | Nhỏ nhất              | Lớn nhất              | Trung bình        |
+| **Learning curve**  | Cao                   | Thấp                  | Trung bình        |
+| **Debugging**       | Khó (binary)          | Dễ (text/curl)        | Trung bình        |
+| **Ecosystem**       | Đang phát triển       | Rất lớn               | Lớn               |
+
+#### # khi nào chọn gì?
+
+- **gRPC**: Service-to-service communication, microservices nội bộ, real-time streaming, low-latency requirements
+- **REST**: Public APIs, browser clients, simple CRUD, team mới bắt đầu
+- **GraphQL**: Frontend-driven APIs, mobile apps cần flexible queries, BFF pattern
+
+### # hands-on: xây dựng gRPC service với Java & Spring Boot
+
+Đủ lý thuyết rồi. Hãy code.
+
+Chúng ta sẽ xây dựng một **Order Management Service** hoàn chỉnh với:
+
+- Unary RPC: Tạo và lấy order
+- Server Streaming: Stream danh sách orders
+- Error handling với gRPC Status codes
+- Interceptors cho logging
+
+#### # project structure
+
+```
+order-grpc-service/
+├── src/main/
+│   ├── proto/
+│   │   └── order_service.proto
+│   ├── java/com/example/orderservice/
+│   │   ├── OrderGrpcServiceApplication.java
+│   │   ├── service/
+│   │   │   └── OrderGrpcService.java
+│   │   ├── interceptor/
+│   │   │   ├── LoggingInterceptor.java
+│   │   │   └── AuthInterceptor.java
+│   │   └── client/
+│   │       └── OrderGrpcClient.java
+│   └── resources/
+│       └── application.yml
+└── pom.xml
+```
+
+#### # bước 1: setup dependencies (maven)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+    </parent>
+
+    <groupId>com.example</groupId>
+    <artifactId>order-grpc-service</artifactId>
+    <version>1.0.0</version>
+
+    <properties>
+        <java.version>17</java.version>
+        <grpc.version>1.60.0</grpc.version>
+        <protobuf.version>3.25.1</protobuf.version>
+        <grpc-spring-boot.version>3.0.0.RELEASE</grpc-spring-boot.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.devh</groupId>
+            <artifactId>grpc-server-spring-boot-starter</artifactId>
+            <version>${grpc-spring-boot.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.devh</groupId>
+            <artifactId>grpc-client-spring-boot-starter</artifactId>
+            <version>${grpc-spring-boot.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <version>1.3.2</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <extensions>
+            <extension>
+                <groupId>kr.motd.maven</groupId>
+                <artifactId>os-maven-plugin</artifactId>
+                <version>1.7.1</version>
+            </extension>
+        </extensions>
+        <plugins>
+            <plugin>
+                <groupId>org.xolstice.maven.plugins</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <version>0.6.1</version>
+                <configuration>
+                    <protocArtifact>
+                        com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}
+                    </protocArtifact>
+                    <pluginId>grpc-java</pluginId>
+                    <pluginArtifact>
+                        io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}
+                    </pluginArtifact>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>compile</goal>
+                            <goal>compile-custom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+> 💡 **Tip**: Library `net.devh:grpc-spring-boot-starter` là de facto standard cho gRPC + Spring Boot. Nó auto-configure gRPC server, tích hợp với Spring DI, và hỗ trợ cả server lẫn client.
+
+#### # bước 2: định nghĩa proto file
+
+Tạo file `src/main/proto/order_service.proto`:
+
+```protobuf
+syntax = "proto3";
+
+package com.example.order;
+
+option java_multiple_files = true;
+option java_package = "com.example.orderservice.grpc";
+option java_outer_classname = "OrderServiceProto";
+
+// ─── Service Definition ───────────────────────────────────
+service OrderService {
+  // Unary: tạo order mới
+  rpc CreateOrder (CreateOrderRequest) returns (OrderResponse);
+
+  // Unary: lấy order theo ID
+  rpc GetOrder (GetOrderRequest) returns (OrderResponse);
+
+  // Server Streaming: lấy danh sách orders của customer
+  rpc ListOrders (ListOrdersRequest) returns (stream OrderResponse);
+
+  // Client Streaming: upload nhiều items cùng lúc
+  rpc BatchCreateItems (stream OrderItem) returns (BatchCreateResponse);
+
+  // Bidirectional Streaming: theo dõi order status real-time
+  rpc TrackOrders (stream TrackOrderRequest) returns (stream OrderStatusUpdate);
+}
+
+// ─── Request Messages ─────────────────────────────────────
+message CreateOrderRequest {
+  string customer_id = 1;
+  repeated OrderItem items = 2;
+  string shipping_address = 3;
+  optional string coupon_code = 4;
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message ListOrdersRequest {
+  string customer_id = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+  OrderStatus status_filter = 4;
+}
+
+message TrackOrderRequest {
+  string order_id = 1;
+}
+
+// ─── Response Messages ────────────────────────────────────
+message OrderResponse {
+  string order_id = 1;
+  string customer_id = 2;
+  repeated OrderItem items = 3;
+  OrderStatus status = 4;
+  double total_amount = 5;
+  string shipping_address = 6;
+  string created_at = 7;
+}
+
+message BatchCreateResponse {
+  int32 total_items = 1;
+  int32 success_count = 2;
+  int32 failed_count = 3;
+}
+
+message OrderStatusUpdate {
+  string order_id = 1;
+  OrderStatus previous_status = 2;
+  OrderStatus current_status = 3;
+  string updated_at = 4;
+  string message = 5;
+}
+
+// ─── Shared Messages ──────────────────────────────────────
+message OrderItem {
+  string product_id = 1;
+  string product_name = 2;
+  int32 quantity = 3;
+  double unit_price = 4;
+}
+
+// ─── Enums ────────────────────────────────────────────────
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  CONFIRMED = 2;
+  PROCESSING = 3;
+  SHIPPED = 4;
+  DELIVERED = 5;
+  CANCELLED = 6;
+}
+```
+
+Chạy `mvn compile` để generate Java code từ proto file. Maven plugin sẽ tự động gọi `protoc` và tạo ra các class trong `target/generated-sources/protobuf/`.
+
+#### # bước 3: application configuration
+
+`src/main/resources/application.yml`:
+
+```yaml
+spring:
+  application:
+    name: order-grpc-service
+
+grpc:
+  server:
+    port: 9090 # gRPC server port (tách biệt với HTTP)
+    enable-keep-alive: true
+    keep-alive-time: 30s
+    keep-alive-timeout: 5s
+    permit-keep-alive-without-calls: true
+    max-inbound-message-size: 4MB
+
+  client:
+    # Config cho khi service này gọi service khác
+    inventory-service:
+      address: static://localhost:9091
+      negotiation-type: plaintext
+      enable-keep-alive: true
+      keep-alive-without-calls: true
+
+logging:
+  level:
+    com.example: DEBUG
+    net.devh.boot.grpc: DEBUG
+```
+
+#### # bước 4: implement gRPC server
+
+Đây là phần quan trọng nhất — implement logic cho service:
+
+```java
+package com.example.orderservice.service;
+
+import com.example.orderservice.grpc.*;
+import io.grpc.Status;
+import io.grpc.stub.StreamObserver;
+import net.devh.boot.grpc.server.service.GrpcService;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
+
+/**
+ * gRPC Service implementation cho Order Management.
+ *
+ * Annotation @GrpcService tương đương @Service của Spring,
+ * nhưng đăng ký class này như một gRPC service handler.
+ * Spring Boot auto-configure sẽ tự động start gRPC server
+ * và register service này.
+ */
+@GrpcService
+public class OrderGrpcService extends OrderServiceGrpc.OrderServiceImplBase {
+
+    // In-memory store (thay bằng database trong production)
+    private final Map<String, OrderResponse> orderStore = new ConcurrentHashMap<>();
+
+    // ═══════════════════════════════════════════════════════════
+    // UNARY RPC: CreateOrder
+    // Client gửi 1 request, server trả 1 response
+    // ═══════════════════════════════════════════════════════════
+    @Override
+    public void createOrder(CreateOrderRequest request,
+                            StreamObserver<OrderResponse> responseObserver) {
+
+        // Validate input
+        if (request.getCustomerId().isBlank()) {
+            responseObserver.onError(
+                Status.INVALID_ARGUMENT
+                    .withDescription("customer_id is required")
+                    .asRuntimeException()
+            );
+            return;
+        }
+
+        if (request.getItemsList().isEmpty()) {
+            responseObserver.onError(
+                Status.INVALID_ARGUMENT
+                    .withDescription("Order must have at least one item")
+                    .asRuntimeException()
+            );
+            return;
+        }
+
+        // Calculate total
+        double totalAmount = request.getItemsList().stream()
+            .mapToDouble(item -> item.getUnitPrice() * item.getQuantity())
+            .sum();
+
+        // Build response
+        String orderId = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
+        OrderResponse order = OrderResponse.newBuilder()
+            .setOrderId(orderId)
+            .setCustomerId(request.getCustomerId())
+            .addAllItems(request.getItemsList())
+            .setStatus(OrderStatus.PENDING)
+            .setTotalAmount(totalAmount)
+            .setShippingAddress(request.getShippingAddress())
+            .setCreatedAt(Instant.now().toString())
+            .build();
+
+        // Persist
+        orderStore.put(orderId, order);
+
+        // Trả response — flow giống REST controller
+        // onNext() = set response body
+        // onCompleted() = send response & close connection
+        responseObserver.onNext(order);
+        responseObserver.onCompleted();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // UNARY RPC: GetOrder
+    // ═══════════════════════════════════════════════════════════
+    @Override
+    public void getOrder(GetOrderRequest request,
+                         StreamObserver<OrderResponse> responseObserver) {
+
+        String orderId = request.getOrderId();
+        OrderResponse order = orderStore.get(orderId);
+
+        if (order == null) {
+            // gRPC dùng Status codes thay vì HTTP status codes
+            // NOT_FOUND tương đương HTTP 404
+            responseObserver.onError(
+                Status.NOT_FOUND
+                    .withDescription("Order not found: " + orderId)
+                    .asRuntimeException()
+            );
+            return;
+        }
+
+        responseObserver.onNext(order);
+        responseObserver.onCompleted();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SERVER STREAMING: ListOrders
+    // Client gửi 1 request, server trả về NHIỀU responses
+    // ═══════════════════════════════════════════════════════════
+    @Override
+    public void listOrders(ListOrdersRequest request,
+                           StreamObserver<OrderResponse> responseObserver) {
+
+        String customerId = request.getCustomerId();
+        OrderStatus statusFilter = request.getStatusFilter();
+
+        orderStore.values().stream()
+            .filter(order -> order.getCustomerId().equals(customerId))
+            .filter(order -> statusFilter == OrderStatus.ORDER_STATUS_UNSPECIFIED
+                             || order.getStatus() == statusFilter)
+            .forEach(order -> {
+                // Mỗi lần gọi onNext() = gửi 1 message trong stream
+                // Client nhận được từng message một, không cần đợi tất cả
+                responseObserver.onNext(order);
+
+                // Simulate delay (trong thực tế, data có thể đến từ DB cursor)
+                try { Thread.sleep(100); } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+
+        // Signal: stream đã kết thúc
+        responseObserver.onCompleted();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CLIENT STREAMING: BatchCreateItems
+    // Client gửi NHIỀU requests, server trả 1 response cuối cùng
+    // ═══════════════════════════════════════════════════════════
+    @Override
+    public StreamObserver<OrderItem> batchCreateItems(
+            StreamObserver<BatchCreateResponse> responseObserver) {
+
+        // Trả về một StreamObserver để NHẬN data từ client
+        return new StreamObserver<>() {
+            private final List<OrderItem> items = new ArrayList<>();
+            private int failedCount = 0;
+
+            @Override
+            public void onNext(OrderItem item) {
+                // Được gọi mỗi khi client gửi 1 item
+                if (item.getQuantity() <= 0) {
+                    failedCount++;
+                } else {
+                    items.add(item);
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                // Client gặp lỗi hoặc disconnect
+                System.err.println("Client error: " + t.getMessage());
+            }
+
+            @Override
+            public void onCompleted() {
+                // Client đã gửi xong tất cả items
+                // Bây giờ mới trả response
+                BatchCreateResponse response = BatchCreateResponse.newBuilder()
+                    .setTotalItems(items.size() + failedCount)
+                    .setSuccessCount(items.size())
+                    .setFailedCount(failedCount)
+                    .build();
+
+                responseObserver.onNext(response);
+                responseObserver.onCompleted();
+            }
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // BIDIRECTIONAL STREAMING: TrackOrders
+    // Cả client và server đều gửi stream, độc lập nhau
+    // ═══════════════════════════════════════════════════════════
+    @Override
+    public StreamObserver<TrackOrderRequest> trackOrders(
+            StreamObserver<OrderStatusUpdate> responseObserver) {
+
+        return new StreamObserver<>() {
+            @Override
+            public void onNext(TrackOrderRequest request) {
+                // Client subscribe theo dõi 1 order
+                String orderId = request.getOrderId();
+                OrderResponse order = orderStore.get(orderId);
+
+                if (order != null) {
+                    // Gửi status update ngay lập tức
+                    OrderStatusUpdate update = OrderStatusUpdate.newBuilder()
+                        .setOrderId(orderId)
+                        .setPreviousStatus(OrderStatus.ORDER_STATUS_UNSPECIFIED)
+                        .setCurrentStatus(order.getStatus())
+                        .setUpdatedAt(Instant.now().toString())
+                        .setMessage("Current status for " + orderId)
+                        .build();
+
+                    responseObserver.onNext(update);
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                System.err.println("Client disconnected: " + t.getMessage());
+            }
+
+            @Override
+            public void onCompleted() {
+                responseObserver.onCompleted();
+            }
+        };
+    }
+}
+```
+
+Hãy chú ý pattern chung:
+
+- **Unary**: `void method(Request, StreamObserver<Response>)` — đơn giản nhất
+- **Server Streaming**: Giống Unary, nhưng gọi `onNext()` nhiều lần
+- **Client Streaming**: Return `StreamObserver<Request>` để nhận data từ client
+- **Bidi Streaming**: Kết hợp cả hai — return `StreamObserver` và dùng `responseObserver`
+
+#### # bước 5: implement gRPC client
+
+```java
+package com.example.orderservice.client;
+
+import com.example.orderservice.grpc.*;
+import io.grpc.StatusRuntimeException;
+import io.grpc.stub.StreamObserver;
+import net.devh.boot.grpc.client.inject.GrpcClient;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+@Service
+public class OrderGrpcClient {
+
+    // @GrpcClient inject một stub tự động từ Spring context
+    // "order-service" map với config trong application.yml
+    @GrpcClient("order-service")
+    private OrderServiceGrpc.OrderServiceBlockingStub blockingStub;
+
+    @GrpcClient("order-service")
+    private OrderServiceGrpc.OrderServiceStub asyncStub;
+
+    // ─── Unary Call (Blocking) ────────────────────────────────
+    public OrderResponse createOrder(String customerId,
+                                     List<OrderItem> items,
+                                     String address) {
+        CreateOrderRequest request = CreateOrderRequest.newBuilder()
+            .setCustomerId(customerId)
+            .addAllItems(items)
+            .setShippingAddress(address)
+            .build();
+
+        try {
+            // Blocking call — thread chờ cho đến khi có response
+            return blockingStub.createOrder(request);
+        } catch (StatusRuntimeException e) {
+            System.err.println("gRPC error: " + e.getStatus());
+            throw e;
+        }
+    }
+
+    // ─── Unary Call (Blocking) ────────────────────────────────
+    public OrderResponse getOrder(String orderId) {
+        GetOrderRequest request = GetOrderRequest.newBuilder()
+            .setOrderId(orderId)
+            .build();
+
+        try {
+            return blockingStub.getOrder(request);
+        } catch (StatusRuntimeException e) {
+            if (e.getStatus().getCode() == io.grpc.Status.Code.NOT_FOUND) {
+                System.err.println("Order not found: " + orderId);
+                return null;
+            }
+            throw e;
+        }
+    }
+
+    // ─── Server Streaming (Blocking Iterator) ─────────────────
+    public List<OrderResponse> listOrders(String customerId) {
+        ListOrdersRequest request = ListOrdersRequest.newBuilder()
+            .setCustomerId(customerId)
+            .build();
+
+        List<OrderResponse> orders = new ArrayList<>();
+
+        // blockingStub trả về Iterator cho server streaming
+        // Mỗi lần gọi next() sẽ block cho đến khi server gửi message tiếp
+        Iterator<OrderResponse> iterator = blockingStub.listOrders(request);
+        while (iterator.hasNext()) {
+            OrderResponse order = iterator.next();
+            orders.add(order);
+            System.out.println("Received order: " + order.getOrderId());
+        }
+
+        return orders;
+    }
+
+    // ─── Server Streaming (Async) ─────────────────────────────
+    public void listOrdersAsync(String customerId) throws InterruptedException {
+        ListOrdersRequest request = ListOrdersRequest.newBuilder()
+            .setCustomerId(customerId)
+            .build();
+
+        CountDownLatch latch = new CountDownLatch(1);
+
+        // Async stub — non-blocking, callback-based
+        asyncStub.listOrders(request, new StreamObserver<>() {
+            @Override
+            public void onNext(OrderResponse order) {
+                System.out.println("Async received: " + order.getOrderId());
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                System.err.println("Stream error: " + t.getMessage());
+                latch.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                System.out.println("Stream completed");
+                latch.countDown();
+            }
+        });
+
+        // Đợi stream hoàn thành (max 30 giây)
+        latch.await(30, TimeUnit.SECONDS);
+    }
+
+    // ─── Client Streaming (Async) ─────────────────────────────
+    public void batchCreateItems(List<OrderItem> items) throws InterruptedException {
+        CountDownLatch latch = new CountDownLatch(1);
+
+        // asyncStub trả về StreamObserver để GỬI data lên server
+        StreamObserver<OrderItem> requestObserver = asyncStub.batchCreateItems(
+            new StreamObserver<>() {
+                @Override
+                public void onNext(BatchCreateResponse response) {
+                    System.out.printf("Batch result: %d/%d succeeded%n",
+                        response.getSuccessCount(),
+                        response.getTotalItems());
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    latch.countDown();
+                }
+
+                @Override
+                public void onCompleted() {
+                    latch.countDown();
+                }
+            }
+        );
+
+        // Gửi từng item lên server
+        for (OrderItem item : items) {
+            requestObserver.onNext(item);
+            Thread.sleep(50); // Simulate delay
+        }
+
+        // Signal: đã gửi xong
+        requestObserver.onCompleted();
+        latch.await(10, TimeUnit.SECONDS);
+    }
+}
+```
+
+> 🔑 **Hai loại Stub quan trọng:**
+>
+> - `BlockingStub`: Synchronous — thread chờ response. Dùng cho Unary và Server Streaming.
+> - `Stub` (async): Asynchronous — callback-based. Dùng cho tất cả 4 patterns.
+> - Còn `FutureStub`: Trả về `ListenableFuture`, chỉ dùng cho Unary.
+
+#### # bước 6: spring boot application
+
+```java
+package com.example.orderservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class OrderGrpcServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(OrderGrpcServiceApplication.class, args);
+        // gRPC server tự động start trên port 9090
+        // Spring Boot web server (nếu có) chạy trên port 8080
+    }
+}
+```
+
+Chạy application:
+
+```bash
+mvn spring-boot:run
+```
+
+Output:
+
+```
+gRPC Server started, listening on address: *, port: 9090
+```
+
+### # error handling & deadline
+
+#### # gRPC status codes
+
+gRPC không dùng HTTP status codes. Thay vào đó, nó có hệ thống status codes riêng:
+
+| gRPC Status          | HTTP tương đương | Khi nào dùng                    |
+| -------------------- | ---------------- | ------------------------------- |
+| `OK`                 | 200              | Thành công                      |
+| `INVALID_ARGUMENT`   | 400              | Input không hợp lệ              |
+| `NOT_FOUND`          | 404              | Resource không tồn tại          |
+| `ALREADY_EXISTS`     | 409              | Resource đã tồn tại             |
+| `PERMISSION_DENIED`  | 403              | Không có quyền                  |
+| `UNAUTHENTICATED`    | 401              | Chưa xác thực                   |
+| `RESOURCE_EXHAUSTED` | 429              | Rate limit / quota exceeded     |
+| `INTERNAL`           | 500              | Lỗi server                      |
+| `UNAVAILABLE`        | 503              | Service tạm thời không khả dụng |
+| `DEADLINE_EXCEEDED`  | 504              | Timeout                         |
+| `UNIMPLEMENTED`      | 501              | Method chưa được implement      |
+| `CANCELLED`          | —                | Client hủy request              |
+
+#### # rich error handling
+
+```java
+import com.google.rpc.ErrorInfo;
+import com.google.rpc.BadRequest;
+import io.grpc.protobuf.StatusProto;
+
+// ─── Trả về error với metadata chi tiết ───────────────────
+private void handleValidationError(
+        StreamObserver<?> responseObserver,
+        String field,
+        String description) {
+
+    // Tạo rich error với field violations
+    BadRequest badRequest = BadRequest.newBuilder()
+        .addFieldViolations(
+            BadRequest.FieldViolation.newBuilder()
+                .setField(field)
+                .setDescription(description)
+                .build()
+        )
+        .build();
+
+    com.google.rpc.Status status = com.google.rpc.Status.newBuilder()
+        .setCode(com.google.rpc.Code.INVALID_ARGUMENT_VALUE)
+        .setMessage("Validation failed")
+        .addDetails(com.google.protobuf.Any.pack(badRequest))
+        .build();
+
+    responseObserver.onError(StatusProto.toStatusRuntimeException(status));
+}
+
+// ─── Client-side: parse rich error ────────────────────────
+try {
+    OrderResponse order = blockingStub.createOrder(request);
+} catch (StatusRuntimeException e) {
+    com.google.rpc.Status status = StatusProto.fromThrowable(e);
+    if (status != null) {
+        for (com.google.protobuf.Any detail : status.getDetailsList()) {
+            if (detail.is(BadRequest.class)) {
+                BadRequest badRequest = detail.unpack(BadRequest.class);
+                badRequest.getFieldViolationsList().forEach(violation ->
+                    System.err.printf("Field '%s': %s%n",
+                        violation.getField(),
+                        violation.getDescription())
+                );
+            }
+        }
+    }
+}
+```
+
+#### # deadline (timeout propagation)
+
+Deadline là một trong những feature hay nhất của gRPC. Nó cho phép **propagate timeout** xuyên suốt chuỗi service calls:
+
+```
+Client (deadline: 5s)
+  → Service A (còn 4.8s)
+    → Service B (còn 4.2s)
+      → Service C (còn 3.5s)
+        → Database (còn 2.8s)
+```
+
+Nếu tổng thời gian vượt quá 5s, TẤT CẢ service trong chain đều nhận được `DEADLINE_EXCEEDED` và có thể cleanup sớm.
+
+```java
+// ─── Client: set deadline ─────────────────────────────────
+OrderResponse order = blockingStub
+    .withDeadlineAfter(5, TimeUnit.SECONDS)  // Timeout 5 giây
+    .getOrder(request);
+
+// ─── Server: check deadline ───────────────────────────────
+@Override
+public void getOrder(GetOrderRequest request,
+                     StreamObserver<OrderResponse> responseObserver) {
+
+    // Check xem deadline đã hết chưa trước khi làm việc nặng
+    if (Context.current().isCancelled()) {
+        responseObserver.onError(
+            Status.CANCELLED
+                .withDescription("Client cancelled or deadline exceeded")
+                .asRuntimeException()
+        );
+        return;
+    }
+
+    // Nếu service này gọi service khác, deadline tự động propagate
+    // qua gRPC context — không cần truyền manual
+    OrderResponse order = orderStore.get(request.getOrderId());
+    responseObserver.onNext(order);
+    responseObserver.onCompleted();
+}
+```
+
+> ⚠️ **Production tip**: LUÔN set deadline cho mọi gRPC call. Không có deadline = request có thể treo vĩnh viễn, leak resources, và gây cascading failures.
+
+### # interceptors & middleware
+
+Interceptors trong gRPC tương đương với Filters/Middleware trong REST. Chúng cho phép bạn thêm cross-cutting concerns mà không sửa business logic.
+
+#### # server interceptor: logging
+
+```java
+package com.example.orderservice.interceptor;
+
+import io.grpc.*;
+import net.devh.boot.grpc.server.interceptor.GrpcGlobalServerInterceptor;
+
+@GrpcGlobalServerInterceptor  // Áp dụng cho TẤT CẢ gRPC services
+public class LoggingInterceptor implements ServerInterceptor {
+
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+            ServerCall<ReqT, RespT> call,
+            Metadata headers,
+            ServerCallHandler<ReqT, RespT> next) {
+
+        String methodName = call.getMethodDescriptor().getFullMethodName();
+        long startTime = System.currentTimeMillis();
+
+        System.out.printf("[gRPC] → %s started%n", methodName);
+
+        // Wrap ServerCall để intercept response
+        ServerCall<ReqT, RespT> wrappedCall = new ForwardingServerCall
+                .SimpleForwardingServerCall<>(call) {
+
+            @Override
+            public void close(Status status, Metadata trailers) {
+                long duration = System.currentTimeMillis() - startTime;
+                System.out.printf("[gRPC] ← %s completed | status=%s | %dms%n",
+                    methodName, status.getCode(), duration);
+                super.close(status, trailers);
+            }
+        };
+
+        return next.startCall(wrappedCall, headers);
+    }
+}
+```
+
+#### # server interceptor: authentication
+
+```java
+package com.example.orderservice.interceptor;
+
+import io.grpc.*;
+import net.devh.boot.grpc.server.interceptor.GrpcGlobalServerInterceptor;
+
+@GrpcGlobalServerInterceptor
+public class AuthInterceptor implements ServerInterceptor {
+
+    // Metadata key cho auth token (tương đương HTTP header)
+    private static final Metadata.Key<String> AUTH_KEY =
+        Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+    // Context key để truyền user info xuống service layer
+    public static final Context.Key<String> USER_ID_KEY =
+        Context.key("userId");
+
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+            ServerCall<ReqT, RespT> call,
+            Metadata headers,
+            ServerCallHandler<ReqT, RespT> next) {
+
+        String methodName = call.getMethodDescriptor().getFullMethodName();
+
+        // Skip auth cho health check
+        if (methodName.contains("Health")) {
+            return next.startCall(call, headers);
+        }
+
+        // Extract token từ metadata
+        String token = headers.get(AUTH_KEY);
+        if (token == null || !token.startsWith("Bearer ")) {
+            call.close(
+                Status.UNAUTHENTICATED.withDescription("Missing or invalid token"),
+                new Metadata()
+            );
+            return new ServerCall.Listener<>() {};
+        }
+
+        // Validate token (simplified)
+        String userId = validateToken(token.substring(7));
+        if (userId == null) {
+            call.close(
+                Status.UNAUTHENTICATED.withDescription("Invalid token"),
+                new Metadata()
+            );
+            return new ServerCall.Listener<>() {};
+        }
+
+        // Attach userId vào gRPC Context — service có thể đọc bằng
+        // AuthInterceptor.USER_ID_KEY.get()
+        Context context = Context.current().withValue(USER_ID_KEY, userId);
+        return Contexts.interceptCall(context, call, headers, next);
+    }
+
+    private String validateToken(String token) {
+        // Implement JWT validation logic here
+        // Return userId if valid, null if invalid
+        return "user-123"; // Simplified
+    }
+}
+```
+
+#### # client interceptor: attach auth token
+
+```java
+package com.example.orderservice.interceptor;
+
+import io.grpc.*;
+import net.devh.boot.grpc.client.interceptor.GrpcGlobalClientInterceptor;
+
+@GrpcGlobalClientInterceptor
+public class ClientAuthInterceptor implements ClientInterceptor {
+
+    private static final Metadata.Key<String> AUTH_KEY =
+        Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+    @Override
+    public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+            MethodDescriptor<ReqT, RespT> method,
+            CallOptions callOptions,
+            Channel next) {
+
+        return new ForwardingClientCall.SimpleForwardingClientCall<>(
+                next.newCall(method, callOptions)) {
+
+            @Override
+            public void start(Listener<RespT> responseListener, Metadata headers) {
+                // Attach token vào mọi outgoing request
+                headers.put(AUTH_KEY, "Bearer " + getToken());
+                super.start(responseListener, headers);
+            }
+        };
+    }
+
+    private String getToken() {
+        // Get token from security context, cache, etc.
+        return "your-jwt-token-here";
+    }
+}
+```
+
+#### # đọc user info trong service
+
+```java
+@GrpcService
+public class OrderGrpcService extends OrderServiceGrpc.OrderServiceImplBase {
+
+    @Override
+    public void createOrder(CreateOrderRequest request,
+                            StreamObserver<OrderResponse> responseObserver) {
+
+        // Đọc userId từ Context (được set bởi AuthInterceptor)
+        String userId = AuthInterceptor.USER_ID_KEY.get();
+        System.out.println("Request from user: " + userId);
+
+        // ... business logic
+    }
+}
+```
+
+### # streaming trong thực tế
+
+#### # real-world example: live order dashboard
+
+Hãy tưởng tượng bạn đang xây dựng một dashboard cho operations team, hiển thị real-time order updates. Đây là nơi bidirectional streaming tỏa sáng:
+
+```protobuf
+service DashboardService {
+  // Operator subscribe theo dõi orders, server push updates real-time
+  rpc WatchOrders (stream WatchFilter) returns (stream DashboardEvent);
+}
+
+message WatchFilter {
+  string region = 1;           // "us-east", "eu-west"
+  OrderStatus status = 2;      // Chỉ theo dõi status cụ thể
+  bool include_metrics = 3;    // Có gửi kèm metrics không
+}
+
+message DashboardEvent {
+  oneof event {
+    OrderCreated order_created = 1;
+    OrderUpdated order_updated = 2;
+    MetricsSnapshot metrics = 3;
+  }
+  string timestamp = 10;
+}
+```
+
+```java
+@GrpcService
+public class DashboardGrpcService
+        extends DashboardServiceGrpc.DashboardServiceImplBase {
+
+    // Quản lý active subscribers
+    private final Set<StreamObserver<DashboardEvent>> subscribers =
+        ConcurrentHashMap.newKeySet();
+
+    @Override
+    public StreamObserver<WatchFilter> watchOrders(
+            StreamObserver<DashboardEvent> responseObserver) {
+
+        // Thêm subscriber
+        subscribers.add(responseObserver);
+
+        return new StreamObserver<>() {
+            private String currentRegion = "";
+
+            @Override
+            public void onNext(WatchFilter filter) {
+                // Client thay đổi filter — ví dụ chuyển từ "us-east"
+                // sang "eu-west" mà KHÔNG cần reconnect
+                currentRegion = filter.getRegion();
+                System.out.println("Filter updated: region=" + currentRegion);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                subscribers.remove(responseObserver);
+            }
+
+            @Override
+            public void onCompleted() {
+                subscribers.remove(responseObserver);
+                responseObserver.onCompleted();
+            }
+        };
+    }
+
+    // Được gọi khi có order mới (từ event bus, Kafka, etc.)
+    public void broadcastOrderCreated(OrderCreated event) {
+        DashboardEvent dashboardEvent = DashboardEvent.newBuilder()
+            .setOrderCreated(event)
+            .setTimestamp(Instant.now().toString())
+            .build();
+
+        // Fan-out tới tất cả subscribers
+        subscribers.forEach(subscriber -> {
+            try {
+                subscriber.onNext(dashboardEvent);
+            } catch (Exception e) {
+                subscribers.remove(subscriber);
+            }
+        });
+    }
+}
+```
+
+#### # flow control & backpressure
+
+Khi server gửi data nhanh hơn client xử lý, gRPC có built-in flow control:
+
+```java
+// Server-side: respect backpressure
+@Override
+public void listOrders(ListOrdersRequest request,
+                       StreamObserver<OrderResponse> responseObserver) {
+
+    // Cast để access flow control methods
+    ServerCallStreamObserver<OrderResponse> serverObserver =
+        (ServerCallStreamObserver<OrderResponse>) responseObserver;
+
+    // Callback khi client sẵn sàng nhận thêm data
+    serverObserver.setOnReadyHandler(() -> {
+        while (serverObserver.isReady()) {
+            OrderResponse order = getNextOrder(); // từ DB cursor
+            if (order == null) {
+                serverObserver.onCompleted();
+                return;
+            }
+            serverObserver.onNext(order);
+        }
+        // Nếu client chưa ready, dừng gửi — tự động resume khi ready
+    });
+}
+```
+
+Đây là cách gRPC tránh OOM (Out of Memory) khi streaming large datasets — một vấn đề mà REST pagination giải quyết kém hơn nhiều.
+
+### # gRPC trong microservices — bài học từ production
+
+#### # service mesh integration
+
+Trong production, gRPC thường chạy cùng service mesh (Istio, Linkerd):
+
+![grpc-microservice](/assets/img/blog/grpc/grpc-microservice.png)
+
+#### # health checking
+
+gRPC có chuẩn health checking riêng:
+
+```java
+// Spring Boot gRPC starter tự động register health service
+// Client hoặc load balancer có thể check:
+// grpc.health.v1.Health/Check
+
+// Custom health indicator
+@Component
+public class OrderServiceHealthIndicator
+        extends AbstractHealthIndicator {
+
+    @Override
+    protected void doHealthCheck(Health.Builder builder) {
+        // Check database connection, dependencies, etc.
+        if (isDatabaseHealthy()) {
+            builder.up().withDetail("database", "connected");
+        } else {
+            builder.down().withDetail("database", "disconnected");
+        }
+    }
+}
+```
+
+#### # load balancing
+
+gRPC hỗ trợ 2 kiểu load balancing:
+
+**1. Proxy-based (L7)**: Envoy, Nginx, HAProxy đứng giữa client và server
+
+```
+Client → [Load Balancer] → Server 1
+                          → Server 2
+                          → Server 3
+```
+
+**2. Client-side**: Client tự quyết định gửi request đến server nào
+
+```java
+// Client-side load balancing với round-robin
+ManagedChannel channel = ManagedChannelBuilder
+    .forTarget("dns:///order-service:9090")
+    .defaultLoadBalancingPolicy("round_robin")
+    .usePlaintext()
+    .build();
+```
+
+> 💡 **Lưu ý quan trọng**: HTTP/2 multiplexing có thể gây vấn đề với L4 load balancer (TCP level) vì tất cả requests đi qua 1 connection. Bạn cần L7 load balancer hoặc client-side load balancing.
+
+#### # retry policy
+
+```java
+// Cấu hình retry trong application.yml
+// hoặc programmatically:
+Map<String, Object> retryPolicy = Map.of(
+    "maxAttempts", 3.0,
+    "initialBackoff", "0.5s",
+    "maxBackoff", "30s",
+    "backoffMultiplier", 2.0,
+    "retryableStatusCodes", List.of("UNAVAILABLE", "DEADLINE_EXCEEDED")
+);
+
+Map<String, Object> serviceConfig = Map.of(
+    "methodConfig", List.of(Map.of(
+        "name", List.of(Map.of(
+            "service", "com.example.order.OrderService"
+        )),
+        "retryPolicy", retryPolicy
+    ))
+);
+
+ManagedChannel channel = ManagedChannelBuilder
+    .forTarget("order-service:9090")
+    .defaultServiceConfig(serviceConfig)
+    .enableRetry()
+    .build();
+```
+
+#### # observability: metrics & tracing
+
+```java
+// Tích hợp với Micrometer (Spring Boot Actuator)
+// và OpenTelemetry cho distributed tracing
+
+@Configuration
+public class GrpcObservabilityConfig {
+
+    @Bean
+    public GrpcGlobalServerInterceptor metricsInterceptor(
+            MeterRegistry meterRegistry) {
+        return new ServerInterceptor() {
+            @Override
+            public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+                    ServerCall<ReqT, RespT> call,
+                    Metadata headers,
+                    ServerCallHandler<ReqT, RespT> next) {
+
+                String method = call.getMethodDescriptor().getBareMethodName();
+                Timer.Sample sample = Timer.start(meterRegistry);
+
+                return next.startCall(
+                    new ForwardingServerCall.SimpleForwardingServerCall<>(call) {
+                        @Override
+                        public void close(Status status, Metadata trailers) {
+                            sample.stop(Timer.builder("grpc.server.calls")
+                                .tag("method", method)
+                                .tag("status", status.getCode().name())
+                                .register(meterRegistry));
+                            super.close(status, trailers);
+                        }
+                    }, headers);
+            }
+        };
+    }
+}
+```
+
+---
+
+### # khi nào KHÔNG nên dùng gRPC
+
+gRPC không phải silver bullet. Đây là những trường hợp bạn nên cân nhắc:
+
+#### # public-facing APIs cho browser
+
+gRPC dùng HTTP/2 binary framing — browser không hỗ trợ trực tiếp. Bạn cần **gRPC-Web** proxy (Envoy) làm trung gian, thêm complexity.
+
+→ **Dùng REST hoặc GraphQL** cho browser clients.
+
+#### # simple CRUD applications
+
+Nếu app chỉ là CRUD đơn giản với vài endpoints, overhead của protobuf compilation, code generation, và learning curve không đáng.
+
+→ **Dùng REST** — đơn giản, ecosystem lớn, ai cũng biết.
+
+#### # khi cần human-readable payloads
+
+Debug gRPC khó hơn REST vì payload là binary. Bạn không thể `curl` một gRPC endpoint (cần `grpcurl` hoặc Postman gRPC). Logs cũng khó đọc hơn.
+
+→ Nếu team cần debug nhanh bằng curl/Postman, **REST dễ hơn nhiều**.
+
+#### # khi team chưa sẵn sàng
+
+gRPC có learning curve. Proto file management, code generation pipeline, streaming patterns — tất cả đều cần thời gian học. Nếu team nhỏ và deadline gấp, đừng ép.
+
+#### # ✅ khi NÊN dùng gRPC
+
+- **Service-to-service** communication trong microservices
+- **Low-latency** requirements (trading, gaming, real-time)
+- **Polyglot** environments (Java service gọi Go service gọi Python service)
+- **Streaming** data (live feeds, IoT, monitoring)
+- **Mobile** backends (bandwidth-sensitive, protobuf nhỏ hơn JSON)
+- **High-throughput** systems (protobuf serialize nhanh hơn JSON 5-10x)
+
+### # kết luận
+
+gRPC không phải là replacement cho REST — nó là một công cụ khác trong toolbox của bạn. gRPC thường được dùng cho hầu hết internal service communication, nhưng vẫn expose REST APIs cho external consumers.
+
+Nếu bạn đang xây dựng microservices và cần:
+
+- Performance tốt hơn JSON/REST
+- Type-safe contracts giữa các services
+- Streaming capabilities
+- Polyglot support
+
+...thì gRPC là lựa chọn đáng cân nhắc.
+
+### Quick Start Checklist
+
+```
+□ Cài đặt protoc compiler
+□ Setup Maven/Gradle plugin cho code generation
+□ Viết .proto file đầu tiên
+□ Implement server với @GrpcService
+□ Test bằng grpcurl hoặc BloomRPC
+□ Thêm interceptors cho logging & auth
+□ Set deadline cho mọi client call
+□ Cấu hình health checking
+□ Monitor với metrics & tracing
+```
+
+### Tài liệu tham khảo
+
+- [gRPC Official Documentation](https://grpc.io/docs/)
+- [Protocol Buffers Language Guide](https://protobuf.dev/programming-guides/proto3/)
+- [grpc-spring-boot-starter](https://yidongnan.github.io/grpc-spring-boot-starter/)
+- [gRPC Java Examples](https://github.com/grpc/grpc-java/tree/master/examples)
+- [Google API Design Guide](https://cloud.google.com/apis/design)
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

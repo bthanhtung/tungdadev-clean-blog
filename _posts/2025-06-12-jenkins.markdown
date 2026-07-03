@@ -1,0 +1,331 @@
+---
+layout: post
+title: "jenkins"
+date: 2025-06-12 19:29:39 +0700
+categories: [Software Development]
+tags: [devops, software-development, jenkins, ci-cd, vietnamese]
+---
+
+Trong thế giới phát triển phần mềm hiện đại, CI/CD không chỉ là một công cụ, nó là "hệ thần kinh" kiểm soát toàn bộ vòng đời của mã nguồn từ lúc commit cho đến khi vận hành trên production. Và khi nhắc đến orchestration (điều phối) cho luồng công việc khổng lồ này, Jenkins vẫn luôn là một tượng đài.
+
+Bài viết này không chỉ dừng lại ở cú pháp. Chúng ta sẽ đi sâu vào bản chất, kiến trúc và những pattern thực chiến để bạn có thể tư duy và vận hành Jenkins như một kỹ sư thực thụ.
+
+### # bản chất
+
+Nhiều người lầm tưởng Jenkins chỉ dùng để "chạy test và build code". Thực tế, Jenkins là một open-source automation server. Nó không tự làm mọi thứ, mà nó điều phối (orchestrate) các công cụ khác (Maven, Docker, Kubernetes, SonarQube...) để tạo ra một luồng Pipeline hoàn chỉnh.
+
+Sức mạnh lớn nhất của Jenkins nằm ở Plugin-based Architecture. Với hệ sinh thái hơn 1800 plugins, Jenkins có thể tích hợp với gần như mọi công nghệ có mặt trên thị trường, biến nó thành một "Hub" trung tâm cho mọi hoạt động tự động hóa.
+
+### # kiến trúc
+
+Để hệ thống CI/CD không trở thành nút thắt cổ chai (bottleneck) khi dự án phình to, Jenkins áp dụng kiến trúc phân tán rất rõ ràng:
+
+![jenkins-structure](/assets/img/blog/jenkins/jenkins-structure.png)
+
+- Controller (Master): Đóng vai trò là "bộ não". Nó quản lý cấu hình, lên lịch (schedule) các job, giao tiếp với người dùng qua UI và phân phối công việc. Nguyên tắc cốt lõi: Tuyệt đối KHÔNG chạy build trực tiếp trên Controller để tránh cạn kiệt tài nguyên và rủi ro bảo mật.
+- Agents (Nodes/Slaves): Những "công nhân" thực thi công việc. Bạn có thể scale hệ thống horizontally bằng cách thêm vô số agent (chạy trên Linux, Windows, hoặc spin-up tự động dưới dạng Docker containers/Kubernetes pods).
+- Executors: Số lượng luồng (slots) trên mỗi agent, quyết định số lượng build có thể chạy song song trên agent đó.
+
+### # pipeline as code (jenkinsfile)
+
+Kỷ nguyên của việc click chuột cấu hình Job trên UI đã qua. Giờ đây, CI/CD phải được quản lý như source code, version hóa và review chặt chẽ. Jenkins cung cấp Declarative Pipeline — một cú pháp Groovy hướng khai báo, giúp định nghĩa rõ ràng, mạch lạc và dễ bảo trì.
+
+Dưới đây là một Pipeline tiêu chuẩn, kết hợp các khâu từ Checkout, Build, Unit Test, Code Quality, đến Build Docker và Deploy lên môi trường Kubernetes:
+
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        MAVEN_OPTS = '-Xmx512m'
+        NEXUS_CREDS = credentials('nexus-credentials')
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES') // Ngăn chặn treo job vĩnh viễn
+        disableConcurrentBuilds()          // Đảm bảo tính nhất quán khi deploy
+        buildDiscarder(logRotator(numToKeepStr: '10')) // Tối giản không gian lưu trữ (Digital Danshari)
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh './mvnw clean package -DskipTests -s settings.xml'
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                sh './mvnw test -s settings.xml'
+            }
+            post {
+                always {
+                    junit '**/target/surefire-reports/*.xml'
+                    jacoco(execPattern: '**/target/jacoco.exec')
+                }
+            }
+        }
+
+        stage('Code Quality') {
+            parallel {
+                stage('SonarQube Analysis') {
+                    steps {
+                        withSonarQubeEnv('sonar') {
+                            sh './mvnw sonar:sonar'
+                        }
+                    }
+                }
+                stage('Security Scan (Fortify)') {
+                    steps {
+                        sh 'scancentral -url ${FORTIFY_URL} start -bt mvn'
+                    }
+                }
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            when { branch 'main' }
+            steps {
+                script {
+                    def image = docker.build("registry/backend-service:${env.BUILD_NUMBER}")
+                    docker.withRegistry('https://registry.example.com', 'docker-creds') {
+                        image.push()
+                        image.push('latest')
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when { branch 'develop' }
+            steps {
+                sh 'kubectl apply -f k8s/staging/ --namespace=staging'
+            }
+        }
+
+        stage('Deploy to Production') {
+            when { branch 'main' }
+            input {
+                message "Duyệt deploy lên Production?" // Manual Gate
+                ok "Deploy"
+            }
+            steps {
+                sh 'kubectl apply -f k8s/prod/ --namespace=prod'
+            }
+        }
+    }
+
+    post {
+        success {
+            slackSend(channel: '#deployments', message: "✅ [${env.JOB_NAME}] Build #${env.BUILD_NUMBER} thành công. Chuẩn bị release.")
+        }
+        failure {
+            slackSend(channel: '#deployments', message: "[${env.JOB_NAME}] Build #${env.BUILD_NUMBER} thất bại. Cần kiểm tra ngay.")
+        }
+        always {
+            cleanWs() // Dọn dẹp Workspace để tránh leak data và tốn dung lượng
+        }
+    }
+}
+```
+
+### # giải quyết bài toán scale
+
+#### # multi-branch pipeline
+
+Thay vì tạo thủ công từng Job cho từng nhánh, Multibranch Pipeline tự động scan Git Repository. Nếu nó thấy Jenkinsfile, nó sẽ tự động tạo một Pipeline tương ứng.
+
+- main: Tự động kích hoạt luồng Build + Deploy Production.
+- develop: Kích hoạt luồng Build + Deploy Staging.
+- feature/X hoặc PR: Chỉ chạy Build, Unit Test và Security Scan.
+
+#### # shared libraries
+
+Khi bạn vận hành một hệ thống lớn (ví dụ: mô hình microservices với hàng chục services dùng chung stack Java/Spring Boot), việc copy-paste Jenkinsfile là một thảm họa bảo trì.
+
+Shared Libraries áp dụng triết lý DRY (Don't Repeat Yourself) vào CI/CD. Bạn đóng gói các logic chung thành một thư viện dùng chung:
+
+```groovy
+// File: vars/springBootPipeline.groovy (Đặt trong Repo Shared Library)
+def call(Map config = [:]) {
+   pipeline {
+       agent any
+       stages {
+           stage('Build') {
+               steps {
+                   sh "./mvnw clean package -P${config.profile ?: 'dev'} -s settings.xml"
+               }
+           }
+           stage('Test') {
+               steps {
+                   sh './mvnw test -s settings.xml'
+               }
+           }
+           stage('Publish') {
+               when { expression { config.publish } }
+               steps {
+                   sh './mvnw deploy -DskipTests -s settings.xml'
+               }
+           }
+       }
+   }
+}
+
+// File: Jenkinsfile (Nằm trong repo của từng Microservice)
+@Library('my-shared-library') _
+buildMaven(profile: 'dev', publish: true)
+```
+
+Sự gọn gàng này giúp pipeline của bạn tuân thủ các nguyên tắc thiết kế sạch (Clean Design), dễ dàng nâng cấp logic CI/CD toàn cục chỉ với một lần sửa đổi.
+
+### # credentials management
+
+Tuyệt đối không hardcode API Keys, Passwords hay Certificates vào mã nguồn. Jenkins cung cấp cơ chế Credentials Management cực kỳ bảo mật:
+
+```groovy
+// Ẩn giấu cấu hình xác thực tinh tế
+withCredentials([usernamePassword(
+   credentialsId: 'nexus-creds',
+   usernameVariable: 'USER',
+   passwordVariable: 'PASS')]) {
+   sh 'curl -u $USER:$PASS https://nexus/...'
+}
+
+// Secret text
+withCredentials([string(credentialsId: 'api-key', variable: 'API_KEY')]) {
+   sh 'curl -H "Authorization: Bearer $API_KEY" ...'
+}
+
+// SSH key
+withCredentials([sshUserPrivateKey(
+   credentialsId: 'deploy-key',
+   keyFileVariable: 'SSH_KEY')]) {
+   sh 'ssh -i $SSH_KEY user@server "deploy.sh"'
+}
+
+// File
+withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+   sh 'kubectl --kubeconfig=$KUBECONFIG apply -f ...'
+}
+```
+
+### # triggers
+
+```groovy
+pipeline {
+   triggers {
+       // Poll SCM every 5 minutes
+       pollSCM('H/5 * * * *')
+
+       // Cron schedule
+       cron('H 2 * * *')  // daily at ~2am
+
+       // Webhook (GitLab/GitHub push)
+       gitlab(triggerOnPush: true, triggerOnMergeRequest: true)
+   }
+}
+```
+
+### # docker in jenkins
+
+```groovy
+pipeline {
+   agent {
+       docker {
+           image 'maven:3.9-eclipse-temurin-21'
+           args '-v $HOME/.m2:/root/.m2'  // cache dependencies
+       }
+   }
+   stages {
+       stage('Build') {
+           steps {
+               sh 'mvn clean package'
+           }
+       }
+   }
+}
+```
+
+### # gitlab ci vs jenkins
+
+| Aspect      | Jenkins                                                                            | GitLab CI                                                                      |
+| ----------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Config      | Jenkinsfile (Groovy - Khả năng lập trình logic phức tạp)                           | .gitlab-ci.yml (YAML - Khai báo tĩnh, cấu trúc chặt chẽ)                       |
+| Hosting     | Self-hosted                                                                        | Built into GitLab                                                              |
+| Plugins     | 1800+ plugins                                                                      | Limited, built-in features                                                     |
+| Flexibility | Rất cao (Groovy scripting). Phù hợp với các workflow orchestration cực kỳ phức tạp | Structured, less flexible - Tốt cho các flow tiêu chuẩn, chuẩn hóa nhanh chóng |
+| Maintenance | Cần nguồn lực vận hành Server, update Plugins, vá lỗi bảo mật                      | Zero maintenance                                                               |
+| Docker      | Plugin-based                                                                       | Native Docker support                                                          |
+| Scaling     | Cơ chế Node/Agent mạnh mẽ nhưng cần setup bài bản                                  | Runner-based, hỗ trợ Docker/K8s native ngay từ đầu                             |
+
+### # best practices
+
+Để vận hành Jenkins trơn tru và chuyên nghiệp, hãy "ghim" ngay các nguyên tắc sau:
+
+- Pipeline as Code là bắt buộc: Mọi Jenkinsfile phải nằm cùng repo code và được version hóa.
+- Tách bạch Controller và Agent: Giữ Controller nhẹ nhàng. Mọi việc nặng nhọc hãy đẩy xuống Agents.
+- Sử dụng Docker Agent: Đừng cài trực tiếp JDK, Node.js hay Maven lên Agent. Hãy dùng Docker Image (VD: maven:3.9-eclipse-temurin-21) làm môi trường build. Tránh tình trạng "Works on my machine" hoặc xung đột phiên bản giữa các job.
+- Luôn Set Timeout: Ngăn chặn các job bị treo (deadlock) âm thầm ngốn tài nguyên hệ thống.
+- Dọn dẹp (Clean Workspace): Thêm bước cleanWs() ở cuối pipeline. Một hệ thống ngăn nắp sẽ hạn chế tối đa các lỗi "bóng ma" do cache cũ để lại.
+- Tối ưu hóa thời gian với Parallel Stages: Các khâu độc lập như chạy Unit Test, quét SonarQube, check lỗ hổng Fortify... hãy cho chạy song song để giảm tổng thời gian chờ đợi của Developer.
+
+---
+
+### # common patterns
+
+#### # maven build with caching
+
+```groovy
+stage('Build') {
+   steps {
+       configFileProvider([configFile(fileId: 'maven-settings', variable: 'MAVEN_SETTINGS')]) {
+           sh "./mvnw clean package -s $MAVEN_SETTINGS -DskipTests"
+       }
+   }
+}
+```
+
+#### # conditional deployment
+
+```groovy
+stage('Deploy') {
+   when {
+       allOf {
+           branch 'main'
+           not { changeRequest() }
+       }
+   }
+   steps { ... }
+}
+```
+
+#### # matrix builds (multiple jdk versions)
+
+```groovy
+stage('Test') {
+   matrix {
+       axes {
+           axis {
+               name 'JDK'
+               values '17', '21'
+           }
+       }
+       stages {
+           stage('Test') {
+               agent { docker { image "eclipse-temurin:${JDK}" } }
+               steps { sh './mvnw test' }
+           }
+       }
+   }
+}
+```
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

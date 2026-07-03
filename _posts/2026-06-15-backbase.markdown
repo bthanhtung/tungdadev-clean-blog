@@ -1,0 +1,191 @@
+---
+layout: post
+title: "backbase — digital banking platform"
+date: 2026-06-15 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, backbase, best-practices, vietnamese]
+---
+
+### # backbase là gì?
+
+**Backbase** là platform thương mại _(commercial)_ chuyên xây dựng digital banking experiences.
+Thay vì ngân hàng tự build từ zero (mất 2-5 năm), **Backbase** cung cấp ready-made platform với UI components, backend services
+và integration layer - ngân hàng chỉ việc customize và deploy trong 6-12 tháng.
+
+Nói đơn giản: **Backbase = "Shopify for banks."** Bạn không build e-commerce engine từ scratch, bạn dùng Shopify rồi customize.
+Tương tự, ngân hàng không build digital banking platform từ scratch, dùng Backbase rồi customize branding, features, integrations.
+
+**Target**: Retail banking (cá nhân), SME banking, Wealth management, Corporate banking.
+**Customers**: Hơn 150 ngân hàng toàn cầu — HSBC, Lloyds, Rabobank, Banorte...
+
+### # kiến trúc tổng quan
+
+Backbase theo mô hình **MACH Architecture** (Microservices, API-first, Cloud-native, Headless)
+
+![backbase-arch](/assets/img/blog/backbase/backbase-arch.png)
+
+### # core concepts
+
+#### # dbs (digital banking services)
+
+DBS là API layer giữa Backbase platform và core banking systems. Nó abstract core banking complexity thành standardized REST APIs.
+Ngân hàng đổi core banking (T24 → Finacle) → chỉ cần rewrite integration adapter, Backbase apps KHÔNG thay đổi.
+
+#### # model bank
+
+Backbase ship "Model Bank" - reference implementation sẵn sàng chạy. Ngân hàng clone Model Bank rồi customize thay vì build from scratch.
+Giống starter template.
+
+#### # widgets & journeys
+
+**Widget**: UI component nhỏ, reusable (account summary, transaction list, transfer form).
+
+**Journey**: Full user flow (onboarding journey, loan application journey) = sequence of widgets + orchestration logic.
+
+#### # entitlements
+
+Permission system multi-level: User → Service Agreement → Function Group → Privileges.
+
+Ví dụ: User A thuộc company X, có Function Group "Payments Maker" với privilege "Create Domestic Payment" lên đến 500 triệu.
+
+### # tech stack
+
+| Layer            | Technology                            |
+| ---------------- | ------------------------------------- |
+| Frontend         | Angular (web), iOS/Android native     |
+| BFF              | Spring Boot (Experience Services)     |
+| Backend          | Spring Boot microservices (Java 17+)  |
+| API Gateway      | Custom (Edge Service) hoặc Kong/Nginx |
+| Database         | MySQL/PostgreSQL per service          |
+| Messaging        | ActiveMQ / Kafka                      |
+| Identity         | Keycloak (IAM), OAuth2/OpenID Connect |
+| Containerization | Docker + Kubernetes                   |
+| Build            | Maven, Jenkins/GitLab CI              |
+| Documentation    | OpenAPI 3.0 (mỗi service có spec)     |
+
+#### # spring boot services anatomy
+
+Mỗi Backbase capability service là Spring Boot application với structure:
+
+```
+capability-service/
+├── src/main/java/
+│   ├── config/          # Spring configuration
+│   ├── rest/            # REST controllers (auto-generated from OpenAPI)
+│   ├── service/         # Business logic
+│   ├── mapper/          # DTO ↔ Domain mapping
+│   ├── integration/     # Integration with core banking
+│   ├── persistence/     # JPA entities, repositories
+│   └── listener/        # Event listeners
+├── src/main/resources/
+│   ├── application.yml
+│   └── api/             # OpenAPI specs
+└── pom.xml
+```
+
+### # integration patterns — kết nối core banking
+
+Backbase KHÔNG phải core banking — nó là engagement layer. Data thật (accounts, balances, transactions) nằm ở core
+banking system (T24, Finacle, Temenos Infinity). Backbase pull/push data qua Integration Services.
+
+#### # ingestion pattern (batch/event-driven)
+
+```
+Core Banking → Event/Batch → Backbase DBS (persist) → Backbase Apps (fast reads)
+```
+
+Data ingested vào Backbase's own database cho fast reads. Users truy cập Backbase DB (milliseconds) thay vì hit core banking trực tiếp (seconds).
+
+```java
+// Ingestion service: pull transactions from core banking, persist to Backbase DB
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class TransactionIngestionService {
+
+   private final CoreBankingClient coreBankingClient;
+   private final TransactionRepository backbaseRepository;
+
+   @Scheduled(fixedRate = 300000)  // Every 5 minutes
+   public void ingestTransactions() {
+       LocalDateTime lastSync = backbaseRepository.getLastSyncTimestamp();
+
+       List<CoreTransaction> newTransactions = coreBankingClient
+           .getTransactionsSince(lastSync);
+
+       List<BackbaseTransaction> mapped = newTransactions.stream()
+           .map(this::mapToBackbase)
+           .toList();
+
+       backbaseRepository.saveAll(mapped);
+       log.info("Ingested {} transactions from core banking", mapped.size());
+   }
+}
+```
+
+#### # pass-through pattern (real-time)
+
+```
+Backbase App → Backbase Service → Core Banking (real-time call) → Response
+```
+
+Cho operations cần real-time data (create payment, check real-time balance).
+
+### # customization — extending backbase
+
+Ngân hàng customize Backbase qua:
+
+1. **Behavior Extensions**: Override/extend service behavior qua Spring Boot hooks
+2. **Custom Services**: Thêm microservice mới cho bank-specific features
+3. **Widget Customization**: Fork/extend Angular widgets
+4. **Integration Adapters**: Connect tới bank's specific core banking
+
+```java
+// Extending Backbase Payment service behavior
+@Configuration
+public class CustomPaymentConfig {
+
+   @Bean
+   @Primary  // Override default implementation
+   public PaymentValidator customPaymentValidator(
+           SanctionScreeningClient sanctionClient,
+           FraudDetectionClient fraudClient) {
+       return new EnhancedPaymentValidator(sanctionClient, fraudClient);
+   }
+}
+
+// Custom pre-processing hook
+@Component
+@Order(1)
+public class FraudCheckInterceptor implements PaymentPreProcessor {
+
+   @Override
+   public void process(PaymentOrder payment) {
+       FraudScore score = fraudService.evaluate(payment);
+       if (score.isHighRisk()) {
+           payment.setStatus(PaymentStatus.PENDING_REVIEW);
+           throw new PaymentHeldException("Held for fraud review");
+       }
+   }
+}
+```
+
+### # so sánh backbase vs build-from-scratch
+
+| Aspect         | Backbase                    | Custom Build                    |
+| -------------- | --------------------------- | ------------------------------- |
+| Time to market | 6-12 months                 | 2-5 years                       |
+| Cost upfront   | License fee (high)          | Development cost (very high)    |
+| Maintenance    | Vendor updates + custom     | 100% your responsibility        |
+| Flexibility    | Within platform constraints | Unlimited                       |
+| Best for       | Banks wanting speed         | Banks with unique requirements  |
+| Risk           | Vendor lock-in              | Technical debt, team dependency |
+| Compliance     | Pre-certified (PCI, etc.)   | Must certify yourself           |
+
+**Khi nào chọn Backbase**: Ngân hàng truyền thống muốn digital transformation nhanh, có budget cho license, chấp nhận platform constraints.
+
+**Khi nào custom build**: Fintech/neobank với business model unique, cần full control, team kỹ thuật mạnh, time-to-market không phải priority #1.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

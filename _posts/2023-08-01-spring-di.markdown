@@ -1,0 +1,160 @@
+---
+layout: post
+title: "spring dependency injection"
+date: 2023-08-01 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, spring-framework, spring-boot, vietnamese]
+---
+
+Hí các bạn, hôm nay mình sẽ chia sẻ về một khái niệm gây nhức nhối và thương nhớ cho rất nhiều developer. Để làm việc được với Spring và hệ sinh thái quanh nó, thì việc đầu tiên, tiên quyết, duy nhất bạn cần làm đó là thấu hiểu định nghĩa của 2 cái này. Vậy nó là cái gì, chúng ta sẽ đi vào chi tiết nhé.
+
+### # giới thiệu
+
+Với lập trình hướng đối tượng, chúng ta thường xuyên làm việc với rất nhiều class trong một chương trình, các class được liên kết với nhau theo một mối quan hệ nào đó.
+
+Dependency là một loại quan hệ giữa 2 class mà trong đó một class hoạt động độc lập và class còn lại phụ thuộc bởi class kia. Sự phụ thuộc chặt chẽ này gây rất nhiều khó khăn khi hệ thống cần thay đổi, nâng cấp. Để giải quyết vấn đề này chúng ta có thể sử dụng `Dependency Injection (DI)`, một dạng design pattern được thiết kế nhằm ngăn chặn sự phụ thuộc nêu trên.
+
+`Dependency Inject` là một kỹ thuật – một Design Pattern cho phép xóa bỏ sự phụ thuộc hard-code và làm cho ứng dụng của bạn dễ mở rộng và maintain hơn.
+
+Nhiệm vụ của Dependency Injection:
+
+- Tạo các đối tượng.
+- Quản lý sự phụ thuộc (dependencies) giữa các đối tượng.
+- Cung cấp (inject) các phụ thuộc được yêu cầu cho đối tượng (được truyền từ bên ngoài đối tượng).
+
+Nguyên tắc hoạt động của Dependency Injection:
+
+- Các module không giao tiếp trực tiếp với nhau, mà thông qua interface. Module cấp thấp sẽ triển khai interface, module cấp cao sẽ gọi module cấp thấp thông qua interface.
+- Việc khởi tạo các module cấp thấp sẽ do DI Container/ IoC Container thực hiện.
+- Việc Module nào gắn với interface nào sẽ được config trong file properties, trong file XML hoặc thông qua Annotation. Annotation là một cách thường được sử dụng trong các Framework, chẳng hạn như @Inject với CDI, @Autowired với Spring hay @ManagedProperty với JSF.
+
+Các thành phần của một Dependency Injection:
+
+- Client: là một class cần sử dụng Service.
+- Service: là một class/ interface cung cấp service/ dependency cho Client.
+- ServiceImpl: cài đặt các phương thực cụ thể của Service.
+- Injector: là một lớp chịu trách nhiệm khởi tạo các service và inject các thể hiện này cho Client.
+
+### # ví dụ demo & các trường hợp sử dụng
+
+Trong Spring có 2 cách thực hiện Injection Dependency là qua hàm khởi tạo và qua hàm setter (By Constructor / By Setter method). Hai cách này có khác nhau đôi chút:
+
+- Inject từng phần: bạn có thể inject từng thuộc tính bằng setter injection nhưng không thể làm với constructor.
+- Overriding: Setter injection ghi đè lại constructor injection, nếu ta dùng cả constructor và setter injection, IoC container sẽ sử dụng setter injection
+- Chuyển đổi: Ta có thể dễ dàng thay đổi giá trị bằng setter injection mà ko cần tạo một instance mới của bean.
+- (Lưu ý: nếu sử dụng setter injection thì class của bạn phải có hàm contructor mặc định không tham số, nếu dùng constructor injection thì phải có hàm khởi tạo với các tham số tương ứng với injection).
+
+Được rồi, chúng ta cùng lướt qua ví dụ nhỏ sau nhé.
+
+File cấu hình xml:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:p="http://www.springframework.org/schema/p"
+  xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd">
+
+  <bean id="helloWorld1" class="springframework.di.HelloWorld">
+    <property name="message" value="inject by setter" />
+  </bean>
+
+  <bean id="helloWorld2" class="springframework.di.HelloWorld">
+    <constructor-arg value="inject by constructor" type="String"></constructor-arg>
+  </bean>
+
+</beans>
+```
+
+HelloWorld.java:
+
+```java
+public class HelloWorld {
+    private String message;
+
+    public HelloWorld() {
+    }
+
+    public HelloWorld(String message) {
+        this.message = message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void print() {
+        System.out.println("Print: " + this.message);
+    }
+}
+```
+
+MainApp.java:
+
+```java
+public class MainApp {
+    public static void main(String[] args) {
+        ApplicationContext context = new ClassPathXmlApplicationContext("applicationContext.xml");
+        HelloWorld helloWorld1 = (HelloWorld) context.getBean("helloWorld1");
+        helloWorld1.print();
+        HelloWorld helloWorld2 = (HelloWorld) context.getBean("helloWorld2");
+        helloWorld2.print();
+
+    }
+}
+```
+
+Một số trường hợp sử dụng DI:
+
+- Khi cần inject các giá trị từ một cấu hình cho một hoặc nhiều module khác nhau.
+- Khi cần inject một dependency cho nhiều module khác nhau.
+- Khi cần một vài service được cung cấp bởi container.
+- Khi cần tách biệt các dependency giữa các môi trường phát triển khác nhau. Chẳng hạn, với môi trường dev chỉ cần log việc gửi mail, trong môi trường product cần gởi mail thông qua một API thật sự.
+
+Một số thư viện thư viện và Framework triển khai DI:
+
+- [Spring](https://spring.io/)
+- [Inject](http://www.cdi-spec.org/)
+- [JSF](https://www.oracle.com/java/technologies/javaserverfaces.html/)
+- [Google Guice](https://github.com/google/guice/)
+- [Dagger](http://square.github.io/dagger/)
+
+### # các dạng dependency injection
+
+Sau khi đã tìm hiểu sơ qua về DI, bây giờ hãy cùng nhau làm rõ xem chúng có những dạng nào và ưu nhược điểm của DI ra làm sao nhé.
+
+- **_Constructor Injection_**: Các dependency sẽ được container truyền vào (inject) 1 class thông qua constructor của class đó. Đây là cách thông dụng nhất.
+- **_Setter Injection_**: Các dependency sẽ được truyền vào 1 class thông qua các hàm Setter.
+- **_Fields/ properties_**: Các dependency sẽ được truyền vào 1 class một cách trực tiếp từ các field.
+- **_Interface Injection_**: Class cần inject sẽ implement 1 interface. Interface này chứa 1 hàm tên Inject. Container sẽ inject dependency vào 1 class thông qua việc gọi hàm Inject của interface đó. Đây là cách rườm rà và cũng ít được sử dụng.
+- **_Service Locator_**: nó hoạt động như một mapper, cho phép thay đổi code tại thời điểm run-time mà không cần biên dịch lại ứng dụng hoặc phải khởi động lại.
+
+Ưu nhược điểm của Dependency Injection:
+
+- Ưu điểm
+  - Giảm sự kết dính giữa các module
+  - Code dễ bảo trì, dễ thay thế module
+  - Rất dễ test và viết Unit Test
+  - Dễ dàng thấy quan hệ giữa các module (Vì các dependecy đều được inject vào constructor)
+
+- Nhược điểm
+  - Khái niệm DI hơi khó hiểu với người mới
+  - Khó debug vì không biết implements nào của interface được gọi đến
+  - Các object được khởi tạo từ đầu làm giảm performance
+  - Làm tăng độ phức tạp của code
+  - Do đó với những ứng dụng nhỏ gọn, làm ăn luôn thì ko nên áp dụng DI, còn những ứng dụng cần sự linh hoạt, mở rộng, maintain thì sử dụng DI.
+
+`Dependency Injection` và `IoC container` là những khái niệm rất quan trọng, hầu hết các ứng dụng, Framework hiện tại đều sử dụng nó. Chúng ta cần tìm hiểu để biết rõ `DI` và `IoC` được ứng dụng trong trường hợp nào.
+
+Nếu áp dụng hợp lý code của chúng ta sẽ chặt chẽ hơn `(loose coupling)`, dễ bảo trì, dễ test hơn, tổ chức ứng dụng hợp lý và gọn gàng hơn.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.
+
+**Reference**:
+
+- [**Spring Framework Documentations**](https://spring.io/projects/spring-framework)

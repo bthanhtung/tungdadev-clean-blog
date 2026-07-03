@@ -1,0 +1,410 @@
+---
+layout: post
+title: "đừng cứ if-else mãi như thế nữa!"
+date: 2024-08-08 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, optimization, vietnamese]
+---
+
+Khi dấng thân vào các dự án thực tế cũ kỹ đã tồn tại từ rất lâu. Bạn có thể sẽ đắm chìm vào hàng ngàn dòng code già nua từ trên xuống dưới, và đôi khi, thật không may khi gặp phải những đoạn code cứ `if-else` để xử lý các logic. Cứ tưởng tượng mà xem, vài chục cái `if-else` liên tục như thế, khác nào đi chặt hẻm, cứ rẽ rồi lại phải lựa chọn để rẽ tiếp ...
+
+Trong bài viết này, có vài cách tối ưu hóa việc sử dụng `if-else`, hạn chế code có quá nhiều điều kiện rẽ nhánh và giúp code trở nên dễ đọc và dễ hiểu hơn nhiều.
+
+### # có quá nhiều câu lệnh `if-else`
+
+Trước khi đi sâu vào chi tiết các phương pháp tối ưu hóa, hãy bắt đầu với một đoạn code demo Java mẫu có chứa nhiều điều kiện `if-else` để sau đó tối ưu hóa nó bằng nhiều cách khác nhau:
+
+```java
+public class ShippingCostCalculator {
+    public double calculateShippingCost(String shippingType, double weight) {
+        if (shippingType.equals("STANDARD")) {
+            return weight * 5.0;
+        } else if (shippingType.equals("EXPRESS")) {
+            return weight * 10.0;
+        } else if (shippingType.equals("SAME_DAY")) {
+            return weight * 20.0;
+        } else if (shippingType.equals("INTERNATIONAL")) {
+            return weight * 50.0;
+        } else if (shippingType.equals("OVERNIGHT")) {
+            return weight * 30.0;
+        }
+        return 0;
+    }
+}
+```
+
+Như bạn có thể thấy, đoạn mã trên tính phí vận chuyển dựa trên loại hình vận chuyển.
+
+### # sử dụng Enum
+
+Bây giờ, chúng ta sẽ sử dụng `Enum` để thay thế các câu lệnh `if-else`.
+
+```java
+public enum ShippingType {
+    STANDARD {
+        @Override
+        public double getCost(double weight) {
+            return weight * 5.0;
+        }
+    },
+    EXPRESS {
+        @Override
+        public double getCost(double weight) {
+            return weight * 10.0;
+        }
+    },
+    SAME_DAY {
+        @Override
+        public double getCost(double weight) {
+            return weight * 20.0;
+        }
+    },
+    INTERNATIONAL {
+        @Override
+        public double getCost(double weight) {
+            return weight * 50.0;
+        }
+    },
+    OVERNIGHT {
+        @Override
+        public double getCost(double weight) {
+            return weight * 30.0;
+        }
+    };
+
+    public abstract double getCost(double weight);
+}
+```
+
+Một hàm tính toán, chỉ cần truyền vào `ShippingType` và `weight`:
+
+```java
+public class ShippingCostCalculator {
+
+    public double calculateShippingCost(ShippingType shippingType, double weight) {
+        return shippingType.getCost(weight);
+    }
+}
+```
+
+Rồi ... trông chương trình chính có vẻ ngắn gọn và dễ đọc hơn nhiều.
+
+```java
+public class MainCost {
+    public static void main(String[] args) {
+        var calculator = new ShippingCostCalculator();
+        var cost = calculator.calculateShippingCost(ShippingType.EXPRESS, 2.5);
+        System.out.println("Shipping cost: " + cost);
+    }
+}
+```
+
+Như bạn có thể thấy, câu lệnh `if-else` phức tạp đã được đơn giản hóa thành hai dòng mã ngắn gọn và dễ hiểu. Hãy chạy hàm main để xem kết quả.
+
+#### # ưu điểm:
+
+- _Khả năng mở rộng_: Có thể dễ dàng thêm các loại hình vận chuyển và giá trị mới, chỉ cần liệt kê chúng và định nghĩa phương thức xử lý tương ứng.
+- _Code dễ bảo trì và dễ hiểu_: Lý do xử lý cho từng phương thức vận chuyển được cô lập và rất dễ nắm bắt.
+
+#### # nhược điểm:
+
+- _Khả năng mở rộng hạn chế_: Mặc dù có thể thêm các loại vận chuyển mới, nhưng khi cần nhiều tham số hơn, `Enum` trở nên không phù hợp và làm mã phức tạp.
+- _Khó thêm tham số mới_: Khi cần thêm nhiều tham số, mã sẽ trở nên cồng kềnh và khó quản lý.
+- _Hạn chế kế thừa_: Enum không thể kế thừa từ các lớp khác, làm giảm khả năng tái sử dụng logic.
+- Việc sử dụng Enum để tối ưu hóa thường phù hợp với các điều kiện đơn giản và ít tham số.
+
+### # tối ưu hóa với Factory Pattern
+
+Vẫn với đoạn mã phức tạp ở trên, chúng ta sẽ tối ưu hóa nó theo cách sau:
+
+Tạo một interface `ShippingCostStrategy`.
+
+```java
+public interface ShippingCostStrategy {
+    double calculate(double weight);
+}
+```
+
+Tiếp theo, chúng ta sẽ tạo các class cụ thể cho từng loại hình giao hàng, triển khai interface đã tạo ở trên.
+
+```java
+public class StandardShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 5.0;
+    }
+}
+
+public class ExpressShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 10.0;
+    }
+}
+
+public class SameDayShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 20.0;
+    }
+}
+
+public class InternationalShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 50.0;
+    }
+}
+
+public class OvernightShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 30.0;
+    }
+}
+```
+
+Bây giờ, chúng ta sẽ tạo một lớp `Factory` để xử lý việc định tuyến đến các `Strategy` dựa trên loại hình vận chuyển.
+
+```java
+public class ShippingCostFactory {
+    private static final Map<String, ShippingCostStrategy> strategies = new HashMap<>();
+
+    static {
+        strategies.put("STANDARD", new StandardShipping());
+        strategies.put("EXPRESS", new ExpressShipping());
+        strategies.put("SAME_DAY", new SameDayShipping());
+        strategies.put("INTERNATIONAL", new InternationalShipping());
+        strategies.put("OVERNIGHT", new OvernightShipping());
+    }
+
+    public static ShippingCostStrategy getStrategy(String shippingType) {
+        ShippingCostStrategy strategy = strategies.get(shippingType);
+        if (strategy == null) {
+            throw new IllegalArgumentException("Invalid shipping type: " + shippingType);
+        }
+        return strategy;
+    }
+}
+```
+
+Bây giờ chỉ cần gọi và sử dụng nó.
+
+```java
+public class ShippingCostCalculator {
+    public double calculateShippingCost(String shippingType, double weight) {
+        ShippingCostStrategy strategy = ShippingCostFactory.getStrategy(shippingType);
+        return strategy.calculate(weight);
+    }
+}
+```
+
+#### # ưu điểm của Factory Pattern:
+
+- _Dễ dàng mở rộng_: Thêm loại giao hàng mới chỉ cần phát triển thêm các lớp và cập nhật `Factory` mà không phải thay đổi mã lõi.
+- _Phân tách logic rõ ràng_: Logic tính phí được tách biệt, dễ quản lý và bảo trì.
+- _Linh hoạt_: `Factory` có thể trả về nhiều giải pháp khác nhau dựa trên các yếu tố khác, tăng tính linh hoạt.
+
+### # tối ưu hóa bằng Strategy Pattern
+
+Trước khi đi vào chi tiết, hãy lưu ý rằng việc triển khai sẽ tương tự với `Factory`, nhưng mục đích sử dụng sẽ hơi khác biệt.
+
+```java
+public interface ShippingCostStrategy {
+    double calculate(double weight);
+}
+```
+
+```java
+public class StandardShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 5.0;
+    }
+}
+
+public class ExpressShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 10.0;
+    }
+}
+
+public class SameDayShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 20.0;
+    }
+}
+
+public class InternationalShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 50.0;
+    }
+}
+
+public class OvernightShipping implements ShippingCostStrategy {
+    @Override
+    public double calculate(double weight) {
+        return weight * 30.0;
+    }
+}
+```
+
+Bây giờ, chúng ta sẽ tạo lớp `ShippingContext` để quản lý các `Strategy`.
+
+```java
+public class ShippingCostContext {
+    private ShippingCostStrategy strategy;
+
+    public void setStrategy(ShippingCostStrategy strategy) {
+        this.strategy = strategy;
+    }
+
+    public double calculateShippingCost(double weight) {
+        return strategy.calculate(weight);
+    }
+}
+```
+
+Lúc này, hàm tính toán sẽ trông như thế này:
+
+```java
+public class ShippingCostCalculator {
+
+    private static final Map<String, ShippingCostStrategy> strategies = new HashMap<>();
+
+    static {
+        strategies.put("STANDARD", new StandardShipping());
+        strategies.put("EXPRESS", new ExpressShipping());
+        strategies.put("SAME_DAY", new SameDayShipping());
+        strategies.put("INTERNATIONAL", new InternationalShipping());
+        strategies.put("OVERNIGHT", new OvernightShipping());
+    }
+
+    private final ShippingCostContext context = new ShippingCostContext();
+
+    public double calculateShippingCost(String shippingType, double weight) {
+        ShippingCostStrategy strategy = strategies.get(shippingType);
+        if (strategy == null) {
+            throw new IllegalArgumentException("Invalid shipping type: " + shippingType);
+        }
+        context.setStrategy(strategy);
+        return context.calculateShippingCost(weight);
+    }
+}
+```
+
+```java
+public class MainCost {
+
+    public static void main(String[] args) {
+        ShippingCostCalculator calculator = new ShippingCostCalculator();
+
+        double weight = 10.0;
+
+        String shippingType1 = "STANDARD";
+        double cost1 = calculator.calculateShippingCost(shippingType1, weight);
+        System.out.println("Shipping cost for " + shippingType1 + ": " + cost1);
+
+        String shippingType2 = "EXPRESS";
+        double cost2 = calculator.calculateShippingCost(shippingType2, weight);
+        System.out.println("Shipping cost for " + shippingType2 + ": " + cost2);
+
+        String shippingType3 = "SAME_DAY";
+        double cost3 = calculator.calculateShippingCost(shippingType3, weight);
+        System.out.println("Shipping cost for " + shippingType3 + ": " + cost3);
+
+        String shippingType4 = "INTERNATIONAL";
+        double cost4 = calculator.calculateShippingCost(shippingType4, weight);
+        System.out.println("Shipping cost for " + shippingType4 + ": " + cost4);
+
+        String shippingType5 = "OVERNIGHT";
+        double cost5 = calculator.calculateShippingCost(shippingType5, weight);
+        System.out.println("Shipping cost for " + shippingType5 + ": " + cost5);
+    }
+}
+```
+
+Trong hai trường hợp trước, `Strategy Pattern` quản lý cách tính phí vận chuyển, trong khi `Factory Pattern` quyết định chiến lược nào sẽ được sử dụng dựa trên loại hình vận chuyển.
+
+### # tối ưu hóa bằng Stream API và Map
+
+Bây giờ, chúng ta sẽ sử dụng `Stream API` và Map để tối ưu hóa quá trình này, giúp mã dễ đọc và ngắn gọn hơn. Thay vì sử dụng các cấu trúc điều kiện phức tạp, ta có thể tận dụng `Map` để ánh xạ các loại hình vận chuyển tới các Strategy tính phí.
+
+```java
+public class ShippingCostCalculator {
+
+    private static final Map<String, Double> shippingCosts = new HashMap<>();
+
+    static {
+        shippingCosts.put("STANDARD", 5.0);
+        shippingCosts.put("EXPRESS", 10.0);
+        shippingCosts.put("SAME_DAY", 20.0);
+        shippingCosts.put("INTERNATIONAL", 50.0);
+        shippingCosts.put("OVERNIGHT", 30.0);
+    }
+
+    public double calculateShippingCost(String shippingType, double weight) {
+        return shippingCosts.entrySet().stream()
+            .filter(entry -> entry.getKey().equalsIgnoreCase(shippingType))
+            .map(Map.Entry::getValue)
+            .findFirst()
+            .orElse(0.0)
+            * weight;
+    }
+
+    public static void main(String[] args) {
+        ShippingCostCalculator calculator = new ShippingCostCalculator();
+
+        double weight = 10.0;
+
+        String shippingType1 = "STANDARD";
+        double cost1 = calculator.calculateShippingCost(shippingType1, weight);
+        System.out.println("Shipping cost for " + shippingType1 + ": " + cost1);
+
+        String shippingType2 = "EXPRESS";
+        double cost2 = calculator.calculateShippingCost(shippingType2, weight);
+        System.out.println("Shipping cost for " + shippingType2 + ": " + cost2);
+
+        String shippingType3 = "SAME_DAY";
+        double cost3 = calculator.calculateShippingCost(shippingType3, weight);
+        System.out.println("Shipping cost for " + shippingType3 + ": " + cost3);
+
+        String shippingType4 = "INTERNATIONAL";
+        double cost4 = calculator.calculateShippingCost(shippingType4, weight);
+        System.out.println("Shipping cost for " + shippingType4 + ": " + cost4);
+
+        String shippingType5 = "OVERNIGHT";
+        double cost5 = calculator.calculateShippingCost(shippingType5, weight);
+        System.out.println("Shipping cost for " + shippingType5 + ": " + cost5);
+
+        String invalidType = "INVALID";
+        double invalidCost = calculator.calculateShippingCost(invalidType, weight);
+        System.out.println("Shipping cost for " + invalidType + ": " + invalidCost);
+    }
+}
+```
+
+#### # uu điểm:
+
+- _Đơn giản hóa code_: Dễ dàng thêm hoặc thay đổi strategy tính phí mà không cần thay đổi cấu trúc điều kiện.
+- _Hiệu suất tốt hơn_: Quản lý các strategy một cách rõ ràng và nhanh chóng thông qua Map.
+- _Dễ bảo trì_: Mã trở nên dễ hiểu và bảo trì hơn vì các strategy được quản lý tập trung.
+
+`Stream API và Map` cũng khá tiện lợi; mặc dù khả năng mở rộng không tốt bằng `Factory` và `Strategy`, nhưng nó vẫn là một lựa chọn khả thi cho các tình huống đơn giản.
+
+### # lời kết
+
+Việc áp dụng các phương pháp code mới để tối ưu đôi khi cần quan tâm đến performance của hệ thống và khả năng mở rộng cũng như bảo trì khi làm việc trong môi trường dự án thực tế nhiều phức tạp.
+
+Sử dụng các cách tối ưu phần nào góp phần làm code trông xịn xò con bò cười hơn nhưng thay vì chỉ cần if-else cái là xong, bạn phải define thêm vài class và implement nhiều hơn. Anw, cái gì cũng có cái giá của nó mà :))))
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.
+
+**Reference**:
+
+- [**Stop using `if-else` statements in Java**](https://medium.com/javarevisited/stop-using-`if-else`-statements-in-java-57234e13bf9d)

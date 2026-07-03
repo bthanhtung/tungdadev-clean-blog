@@ -1,0 +1,347 @@
+---
+layout: post
+title: "list in java"
+date: 2023-12-05 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, best-practices, vietnamese]
+---
+
+Trong hành trình xây dựng các hệ thống backend, `List<E>` có lẽ là cấu trúc dữ liệu được chúng ta "gọi tên" nhiều nhất.
+Nó đơn giản, dễ dùng và dường như luôn hoàn thành tốt nhiệm vụ. Tuy nhiên, sự tiện lợi bề mặt này thường che dấu những chi phí ngầm về bộ nhớ và CPU.
+
+Với tư cách là những Engineer, việc chỉ biết "cách dùng" là chưa đủ. Để thiết kế những hệ thống xử lý hàng triệu request
+với độ trễ thấp, chúng ta cần một sự thấu cảm sâu sắc với hệ thống (Mechanical Sympathy) - hiểu rõ từng byte bộ nhớ được
+cấp phát và cách CPU cache tương tác với cấu trúc dữ liệu của mình.
+
+Bài viết này sẽ "phẫu thuật" toàn diện `List Interface` trong Java, từ kiến trúc bên trong, độ phức tạp thuật toán cho đến những cạm bẫy thực tiễn nhất.
+
+### # tổng quan list interface
+
+`List<E>` đại diện cho một `ordered collection` (chuỗi dữ liệu có thứ tự). Nó cho phép chứa các phần tử trùng lặp `(duplicate)`
+và hỗ trợ truy xuất ngẫu nhiên (random access) thông qua index.
+
+Hệ sinh thái của `List` có thể được hình dung như sau:
+![list-hierarchy](/assets/img/blog/list/list-hierarchy.png)
+
+_**Lưu ý**_: Từ Java 21, sự xuất hiện của `SequencedCollection` đã mang lại các phương thức đồng nhất như `getFirst()`, `getLast()`
+cho toàn bộ các `collection` có thứ tự, làm cho việc thao tác với `List` càng trở nên liền mạch hơn.
+
+### # arraylist
+
+`ArrayList` là implementation mặc định mà 95% kỹ sư sẽ gõ khi cần một `List`. Sức mạnh của nó đến từ sự đơn giản.
+
+#### # internal structure
+
+Về bản chất, `ArrayList` chỉ là một lớp bọc (wrapper) xung quanh một mảng tĩnh `Object[]` kết hợp với một biến `size` để theo dõi số lượng phần tử thực tế.
+
+```java
+// Khởi tạo một ArrayList
+ArrayList<String> list = new ArrayList<>();
+
+// Bên dưới low-level:
+// elementData = new Object[10] (Default capacity là 10)
+// size = 0
+```
+
+#### # grow mechanism - cơ chế phình to
+
+Mảng trong Java là tĩnh. Khi `ArrayList` đầy, nó phải thực hiện một quá trình tái cấp phát (resize) vô cùng tốn kém:
+
+- Phân bổ một mảng mới với kích thước gấp `1.5` lần mảng cũ `(oldCapacity + (oldCapacity >> 1))`.
+- Sử dụng `System.arraycopy()` (một native method) để bốc toàn bộ dữ liệu từ mảng cũ sang mảng mới.
+- Mảng cũ bị bỏ rơi và chờ `Garbage Collector (GC)` dọn dẹp.
+
+Quá trình `resize` tốn thời gian tuyến tính `O(n)`. Tuy nhiên, nếu xét trên trung bình (amortized), thao tác `add(e)` vẫn đạt hiệu suất `O(1)`.
+
+#### # operations complexity
+
+| Operation      | Complexity     | Lý do                     |
+| -------------- | -------------- | ------------------------- |
+| get(index)     | O(1)           | Direct array access       |
+| set(index, e)  | O(1)           | Direct array access       |
+| add(e) (end)   | O(1) amortized | Append, occasional resize |
+| add(index, e)  | O(n)           | Shift elements right      |
+| remove(index)  | O(n)           | Shift elements left       |
+| remove(Object) | O(n)           | Linear search + shift     |
+| contains(e)    | O(n)           | Linear search             |
+| indexOf(e)     | O(n)           | Linear search             |
+| size()         | O(1)           | Stored field              |
+| isEmpty()      | O(1)           | size == 0                 |
+
+#### # memory layout
+
+Dữ liệu trong `ArrayList` được sắp xếp liên tục trên RAM: `[elem0, elem1, elem2, ..., null, null]`
+
+- Overhead: Chỉ tốn khoảng 4 bytes (hoặc 8 bytes tùy kiến trúc JVM) cho mỗi tham chiếu (reference) trỏ tới object thật.
+- Wasted Space: Phần dung lượng (capacity) dư thừa chưa được dùng đến.
+
+#### # best practices
+
+- Dự đoán capacity: Nếu bạn biết trước hệ thống sẽ đổ 10,000 records từ database vào `List`, hãy khởi tạo: `new ArrayList<>(10000)`. Điều này cứu hệ thống khỏi hàng tá vòng lặp `System.arraycopy()` vô nghĩa và giảm tải cho GC.
+- Giải phóng bộ nhớ: Dùng `list.trimToSize()` sau khi hoàn tất việc `populate` một danh sách lớn và không có ý định thêm mới, giúp trả lại phần mảng null thừa thãi cho `Heap`.
+- Bulk operations: Luôn dùng `addAll()` thay vì lặp qua từng phần tử để `add()`. `addAll()` chỉ gọi `arraycopy` đúng 1 lần.
+
+### # LinkedList
+
+Nhiều tài liệu cũ khuyên dùng `LinkedList` khi cần `chèn/xóa` nhiều ở giữa danh sách. Trong kỷ nguyên của phần cứng hiện đại, lời khuyên này thường dẫn đến những sai lầm tai hại về hiệu suất.
+
+#### # internal structure
+
+`LinkedList` trong Java là một danh sách liên kết kép `(Doubly-linked list)`. Mỗi phần tử là một Node độc lập chứa tham chiếu đến Node trước và Node sau.
+
+![list-structure](/assets/img/blog/list/list-structure.png)
+
+Cú pháp Java:
+
+```java
+private static class Node<E> {
+   E item;
+   Node<E> next;
+   Node<E> prev;
+}
+```
+
+_**Tại sao `LinkedList` lại chậm trong thực tế?**_
+Dù lý thuyết nói rằng `thêm/xóa` phần tử ở giữa `LinkedList` chỉ tốn `O(1)` cho việc đổi con trỏ, nhưng để tìm được vị trí đó, phải duyệt qua danh sách với độ phức tạp `O(n)`.
+
+Hơn thế nữa, `Cache Locality` (Tính cục bộ của bộ nhớ cache) là điểm yếu tử huyệt của `LinkedList`:
+
+- `ArrayList` lưu trữ các phần tử nằm sát nhau trên thanh RAM. Khi CPU đọc phần tử đầu tiên, nó nạp luôn cả các phần tử tiếp theo vào `L1/L2 Cache`. Việc duyệt mảng diễn ra chớp nhoáng.
+- `LinkedList` cấp phát các `Node` rải rác khắp nơi trên `Heap`. Mỗi lần duyệt qua `next`, CPU bị "Cache Miss" và phải tốn chu kỳ clock đắt đỏ để lôi dữ liệu từ RAM chính lên.
+
+#### # operations complexity
+
+| Operation                    | Complexity | Lý do                      |
+| ---------------------------- | ---------- | -------------------------- |
+| get(index)                   | O(n)       | Traverse from head or tail |
+| set(index, e)                | O(n)       | Traverse to find node      |
+| addFirst(e) / addLast(e)     | O(1)       | Update head/tail pointers  |
+| add(index, e)                | O(n)       | Traverse + O(1) link       |
+| removeFirst() / removeLast() | O(1)       | Update head/tail           |
+| remove(index)                | O(n)       | Traverse + O(1) unlink     |
+| contains(e)                  | O(n)       | Linear search              |
+
+#### # linkedlist implements deque
+
+```java
+LinkedList<String> deque = new LinkedList<>();
+deque.addFirst("A");    // push to front
+deque.addLast("B");     // push to back
+deque.peekFirst();      // view front without remove
+deque.pollLast();       // remove from back
+```
+
+#### # memory overhead
+
+Với mỗi phần tử được thêm vào, `LinkedList` tốn: 16 bytes (Object header) + 8 bytes (prev) + 8 bytes (next) + 8 bytes (item) = 40 bytes.
+Cao gấp 10 lần so với mức 4 bytes của `ArrayList`. Ở quy mô hàng triệu phần tử, đây là một thảm họa rò rỉ tài nguyên.
+
+### # ArrayList vs LinkedList
+
+| Tiêu chí                | ArrayList              | LinkedList                    |
+| ----------------------- | ---------------------- | ----------------------------- |
+| Random access           | O(1) ★                 | O(n)                          |
+| Add/remove at end       | O(1) amortized         | O(1)                          |
+| Add/remove at middle    | O(n) (shift)           | O(n) (traverse) + O(1) (link) |
+| Add/remove at beginning | O(n) (shift all)       | O(1) ★                        |
+| Memory per element      | ~4 bytes               | ~40 bytes                     |
+| Cache locality          | Excellent (contiguous) | Poor (scattered in heap)      |
+| Iterator remove         | O(n)                   | O(1)                          |
+
+→ Hãy chọn `ArrayList` cho `95%` các bài toán. `LinkedList` chỉ thực sự phát huy tác dụng khi dùng nó như một `Hàng đợi hai đầu (Deque)`
+và liên tục `thêm/xóa` ở đầu/cuối của danh sách hoặc khi làm việc với `Iterator.remove()` trong một vòng lặp lớn.
+
+### # CopyOnWriteArrayList
+
+Trong một hệ thống phân tán, trạng thái chia sẻ (shared state) là nguồn cơn của mọi `bug concurrency`. `ArrayList` không `thread-safe`.
+Nếu cần an toàn đa luồng, đừng dùng `Vector` hay `Collections.synchronizedList()` - chúng sử dụng cơ chế khóa (lock) toàn cục, gây nghẽn cổ chai (bottleneck) nghiêm trọng.
+
+Hãy dùng `CopyOnWriteArrayList`:
+
+- Cơ chế Read: Không hề có khóa (lock-free). Các luồng đọc dữ liệu từ một "snapshot" cố định với tốc độ `O(1)`.
+- Cơ chế Write: Mỗi khi có thao tác `thêm/xóa/sửa`, nó tạo ra một bản copy mới hoàn toàn của mảng bên dưới, thay đổi trên bản copy,
+  sau đó tráo đổi (swap) tham chiếu.
+
+```java
+CopyOnWriteArrayList<String> list = new CopyOnWriteArrayList<>();
+
+// Write: copy entire array → modify copy → swap reference
+list.add("item"); // O(n) — expensive!
+
+// Read: no locking, read from current snapshot
+list.get(0); // O(1), always consistent snapshot
+
+// Iterator: snapshot at creation time, never throws ConcurrentModificationException
+for (String item : list) {
+   list.add("new"); // OK! Iterator sees old snapshot
+}
+```
+
+Ứng dụng thực tế: Tuyệt vời cho các kịch bản `Read-Heavy`, `Write-Rare` như lưu trữ danh sách `Event Listeners`,
+bộ đệm cấu hình (Config Caches) hay danh sách các instance trong Service Discovery.
+
+### # vector & stack (legacy)
+
+```java
+// Vector = synchronized ArrayList (every method synchronized)
+Vector<String> vector = new Vector<>(); // DON'T USE — use ArrayList + external sync
+
+// Stack = LIFO, extends Vector
+Stack<String> stack = new Stack<>(); // DON'T USE — use ArrayDeque
+```
+
+**Thay thế:**
+
+- Vector → ArrayList (hoặc CopyOnWriteArrayList nếu cần thread-safe)
+- Stack → ArrayDeque
+
+### # immutable lists
+
+Tính bất biến (Immutability) giúp code dễ dự đoán và an toàn hơn, đặc biệt trong `Clean Architecture`.
+Các phiên bản Java gần đây cung cấp nhiều API mạnh mẽ để xử lý việc này:
+
+```java
+// Java 9+: Immutable tuyệt đối (Không cho phép null)
+List<String> immutable = List.of("Clean", "Architecture", "CQRS");
+immutable.add("Saga"); // Bắn lỗi: UnsupportedOperationException!
+
+// Java 10+: Copy tạo ra một Immutable List mới
+List<String> copy = List.copyOf(mutableList);
+
+// Bẫy Unmodifiable View:
+List<String> view = Collections.unmodifiableList(mutableList);
+mutableList.add("New Event"); // CẢNH BÁO: 'view' cũng sẽ bị thay đổi theo!
+```
+
+### # sorting
+
+Under the hood, Java sử dụng các thuật toán tối ưu cho từng loại dữ liệu:
+
+- `Arrays.sort()` cho primitives: Sử dụng `Dual-Pivot Quicksort` mang lại hiệu suất trung bình `O(nlogn)`.
+- `Arrays.sort()` cho Objects (và `Collections.sort()`): Sử dụng `TimSort`. Đây là một thuật toán stable sort cực kỳ thông minh,
+  tận dụng các mảng con đã được sắp xếp sẵn (runs) để tăng tốc, hoàn hảo cho các dữ liệu thực tế.
+
+```java
+// Natural order
+Collections.sort(list);
+list.sort(Comparator.naturalOrder());
+
+// Custom comparator
+list.sort(Comparator.comparing(User::getName));
+list.sort(Comparator.comparing(User::getAge).reversed());
+
+// Multiple fields
+list.sort(Comparator.comparing(User::getLastName)
+   .thenComparing(User::getFirstName)
+   .thenComparingInt(User::getAge));
+
+// Null-safe
+list.sort(Comparator.nullsLast(Comparator.naturalOrder()));
+```
+
+#### # sort algorithms
+
+- `Arrays.sort()` (primitives): Dual-Pivot Quicksort - `O(nlogn)` average
+- `Arrays.sort()` (objects): TimSort - `O(nlogn)`, stable, good for partially sorted
+- `Collections.sort()`: delegates to `Arrays.sort()` on backing array
+
+### # stream operations
+
+Data manipulation trở nên thanh lịch hơn bao giờ hết với Streams:
+
+```java
+// Filter + transform
+List<String> names = users.stream()
+   .filter(u -> u.getAge() > 18)
+   .map(User::getName)
+   .collect(Collectors.toList());
+
+// toList() (Java 16+, unmodifiable)
+List<String> names = users.stream()
+   .map(User::getName)
+   .toList();
+
+// Flat map
+List<String> allTags = posts.stream()
+   .flatMap(p -> p.getTags().stream())
+   .distinct()
+   .collect(Collectors.toList());
+
+// Reduce
+int total = orders.stream()
+   .mapToInt(Order::getAmount)
+   .sum();
+
+// Partition
+Map<Boolean, List<User>> partition = users.stream()
+   .collect(Collectors.partitioningBy(u -> u.getAge() >= 18));
+```
+
+### # common pitfalls
+
+#### # ConcurrentModificationException
+
+Tuyệt đối không sử dụng `list.remove()` bên trong vòng lặp `for-each`. Cơ chế `fail-fast` của `Iterator` sẽ ngay lập tức ném ra ngoại lệ.
+
+```java
+// WRONG: modify list during iteration
+for (String item : list) {
+   if (item.equals("remove")) {
+       list.remove(item); // ConcurrentModificationException!
+   }
+}
+
+// RIGHT: use Iterator.remove()
+Iterator<String> it = list.iterator();
+while (it.hasNext()) {
+   if (it.next().equals("remove")) {
+       it.remove(); // safe
+   }
+}
+
+// RIGHT: removeIf (Java 8+)
+list.removeIf(item -> item.equals("remove"));
+```
+
+#### # Arrays.asList() trap
+
+Phương thức này không trả về `java.util.ArrayList` mà trả về một lớp nội bộ có kích thước cố định (fixed-size) và trực tiếp "trưng dụng" mảng gốc.
+
+```java
+List<String> list = Arrays.asList("a", "b", "c");
+list.add("d");    // UnsupportedOperationException! (fixed-size)
+list.set(0, "x"); // OK (modification allowed)
+
+// Mutable copy:
+List<String> mutable = new ArrayList<>(Arrays.asList("a", "b", "c"));
+```
+
+#### # subList() is a VIEW
+
+`subList()` không tạo ra một `List` mới, nó chỉ trả về một `VIEW` (góc nhìn) đè lên mảng ban đầu.
+
+- Thay đổi trên `subList` sẽ làm thay đổi danh sách gốc.
+- Nguy hiểm: Nếu biến đổi cấu trúc danh sách gốc `(add/remove)`, `subList` sẽ lập tức hỏng và ném `ConcurrentModificationException` khi được truy cập.
+- Memory Leak: Giữ lại một tham chiếu `subList` nhỏ sẽ ngăn cản GC thu gom toàn bộ danh sách gốc khổng lồ.
+
+```java
+List<String> original = new ArrayList<>(List.of("a", "b", "c", "d"));
+List<String> sub = original.subList(1, 3); // ["b", "c"]
+sub.set(0, "X"); // original is now ["a", "X", "c", "d"]!
+original.add("e"); // sub is now INVALID → ConcurrentModificationException on next access
+```
+
+### # interview tips
+
+- ArrayList: dynamic array, `O(1)` get, `O(n)` insert middle, 1.5x growth
+- LinkedList: doubly-linked, `O(1)` add/remove ends, `O(n)` random access, 10x memory
+- ArrayList wins almost always (cache locality, less memory)
+- CopyOnWriteArrayList: snapshot reads, copy-on-write, read-heavy scenarios
+- fail-fast iterators: ConcurrentModificationException nếu modify during iteration
+- Arrays.asList(): fixed-size, backed by original array
+- List.of(): truly immutable, no null
+- TimSort: stable, `O(nlogn)`, good for partially sorted data
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.

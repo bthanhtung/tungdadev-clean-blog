@@ -1,0 +1,359 @@
+---
+layout: post
+title: "map in java"
+date: 2023-12-20 19:29:39 +0700
+categories: [Software Development]
+tags: [java, software-development, best-practices, vietnamese]
+---
+
+Việc khai báo `Map<String, Object> map = new HashMap<>()` đã trở thành phản xạ vô điều kiện của hầu hết các lập trình viên Java.
+Nhưng trong các hệ thống phân tán hoặc các ứng dụng yêu cầu hiệu năng cực độ, sự hời hợt trong việc chọn lựa cấu trúc dữ liệu có
+thể dẫn đến những nút thắt cổ chai nghiêm trọng về bộ nhớ và CPU.
+
+Một engineer thực thụ không chỉ biết cách dùng, mà còn phải hiểu rõ cơ chế bên dưới vỏ bọc `(under the hood)` để kiểm soát
+cuộc chơi. Bài viết này sẽ bóc tách toàn diện hệ sinh thái `Map Interface` trong Java, từ kiến trúc nội tại đến các mẫu thiết kế thực chiến.
+
+### # map interface
+
+`Map` là cấu trúc dữ liệu lưu trữ theo cặp `Key-Value`, nơi mỗi `Key` là duy nhất và ánh xạ tới đúng một `Value`.
+Tùy thuộc vào bài toán về tốc độ truy xuất, thứ tự lưu trữ hay tính an toàn trong môi trường đa luồng, Java cung cấp các triển khai `(implementations)` chuyên biệt:
+
+- HashMap: time complexity `O(1)`, tuy không duy trì thứ tự nhưng cho phép `null`.
+- LinkedHashMap: kế thừa `HashMap`, có duy trì thứ tự thêm vào hoặc truy cập (rất tốt cho `LRU Cache`).
+- TreeMap: dựa trên `Red-Black Tree`, time complexity `O(logn)`, tự động sắp xếp `key`.
+- ConcurrentHashMap: tối ưu cho môi trường đa luồng với cơ chế khóa phân mảnh (`segmented locking/node-level locking`).
+- WeakHashMap: thân thiện với `Garbage Collector` và có khả năng tự động dọn dẹp bộ nhớ.
+- EnumMap: hiệu năng tối đa khi `Key` là các hằng số `Enum`.
+- IdentityHashMap: so sánh `Key` bằng địa chỉ vùng nhớ thay vì giá trị.
+
+### # HashMap
+
+Được các Engineer sử dụng nhiều nhất, nhưng `HashMap` cũng là cấu trúc chứa đựng nhiều cơ chế phức tạp nhất từ Java 8 trở đi.
+Bản chất của nó là sự kết hợp giữa mảng (`Array of Buckets`), danh sách liên kết (`Linked List`) và Cây đỏ đen (`Red-Black Tree`).
+
+#### # internal structure (java 8+)
+
+`HashMap` chứa một mảng các tham chiếu đến các `Node`. Mỗi phần tử trong mảng này là một `bucket` (ô chứa/thùng chứa),
+nó có thể nhận giá trị `null`, trỏ đến một `Node` đơn lẻ (nút đầu tiên của một danh sách liên kết) hoặc trỏ đến một `TreeNode` (gốc của một cây đỏ-đen).
+
+![map-internal-structure](/assets/img/blog/map/map-internal-structure.png)
+
+Nếu một `bucket` chứa một danh sách liên kết, mỗi `Node` sẽ có một tham chiếu `next` để trỏ đến nút kế tiếp trong chuỗi.
+Khi độ dài của chuỗi vượt quá `8`, danh sách liên kết này sẽ được chuyển đổi thành một `cây đỏ-đen`,
+biểu diễn bởi các `TreeNode` (các nút cây này kế thừa từ lớp `Node`).
+
+#### # cách put() hoạt động
+
+Khi thực hiện thao tác `push` dữ liệu vào `Map`, quá trình phân bổ tuân theo một quy trình tính toán rạch ròi:
+
+- _Tính toán Hash_: Java không dùng trực tiếp `hashCode()` của đối tượng. Hàm `hash()` sử dụng phép toán `XOR` giữa các bit
+  cao và thấp của `hashCode` để dàn đều phân phối, giảm thiểu tỉ lệ đụng độ `(collision)` khi dung lượng `Map` còn nhỏ.
+- _Định vị Index_: vị trí `bucket` được tính bằng phép toán `bitwise AND (capacity - 1) & hash`. Phép toán này tốn ít chu kỳ CPU hơn rất nhiều so với phép chia lấy dư `%`.
+- _Xử lý Đụng độ_: nếu `bucket` trống, một `Node` mới sẽ được tạo. Nếu đã có dữ liệu, Java sẽ đối chiếu `Key`. Nếu trùng khớp (thông qua `equals()`), `Value` sẽ được cập nhật, nếu không, `Node` mới được nối vào cuối danh sách.
+
+#### # Treeification & resize
+
+Sự xuống cấp hiệu năng xảy ra khi nhiều `Key` bị gom vào cùng một `bucket`. Để giải quyết, Java 8 đã áp dụng cơ chế `Treeification`:
+
+- _Ngưỡng Treeify (8 nodes)_: Khi danh sách liên kết đạt `8` phần tử, cấu trúc sẽ được chuyển đổi thành `Red-Black Tree`, kéo độ phức tạp từ `O(n)` xuống `O(log n)`.
+- _Ngưỡng Untreeify (6 nodes)_: Khi số lượng phần tử giảm, cấu trúc thoái lui về lại danh sách liên kết để loại bỏ chi phí duy trì cây không cần thiết.
+- _Cơ chế Rehashing_: Khi kích thước vượt quá `capacity _ loadFactor` (mặc định 16 \_ 0.75 = 12), `HashMap` sẽ nhân đôi
+  kích thước mảng. Quá trình này bắt buộc tính toán lại vị trí của toàn bộ các entry - một tác vụ `O(n)` cực kỳ hao tổn
+  tài nguyên. → **Best practice**: Luôn khởi tạo `capacity` nếu bạn ước lượng được số lượng phần tử.
+
+#### # key properties
+
+```java
+// QUAN TRỌNG: key phải override cả hashCode() VÀ equals()
+// Nếu không → 2 objects "equal" nhưng khác bucket → duplicate keys!
+
+// Contract:
+// 1. equals() = true → hashCode() PHẢI bằng nhau
+// 2. hashCode() bằng nhau → equals() KHÔNG nhất thiết true (collision OK)
+// 3. hashCode() phải consistent (cùng object → cùng hash)
+```
+
+#### # complexity
+
+| Operation       | Average | Worst (all collisions)                |
+| --------------- | ------- | ------------------------------------- |
+| put()           | O(1)    | O(log n) (tree) / O(n) (list, Java 7) |
+| get()           | O(1)    | O(log n)                              |
+| remove()        | O(1)    | O(log n)                              |
+| containsKey()   | O(1)    | O(log n)                              |
+| containsValue() | O(n)    | O(n)                                  |
+
+#### # null handling
+
+- 1 null key allowed (luôn ở bucket 0)
+- Multiple null values allowed
+
+### # LinkedHashMap
+
+Bằng cách duy trì thêm một danh sách liên kết đôi xuyên suốt tất cả các entry, `LinkedHashMap` cho phép duyệt phần tử
+theo đúng thứ tự chèn. Đáng giá hơn, chỉ với một cờ `accessOrder = true`, nó biến thành công cụ hoàn hảo để xây dựng bộ nhớ đệm `LRU - Least Recently Used`.
+
+```java
+// Insertion order (default)
+Map<String, Integer> map = new LinkedHashMap<>();
+map.put("c", 3);
+map.put("a", 1);
+map.put("b", 2);
+// Iteration: c → a → b (insertion order)
+
+// Access order (LRU cache)
+Map<String, Integer> lru = new LinkedHashMap<>(16, 0.75f, true); // accessOrder=true
+lru.put("a", 1);
+lru.put("b", 2);
+lru.put("c", 3);
+lru.get("a"); // move "a" to tail
+// Iteration: b → c → a (least recently used first)
+```
+
+#### # LRU cache implementation
+
+```java
+public class LRUCache<K, V> extends LinkedHashMap<K, V> {
+   private final int maxSize;
+
+   public LRUCache(int maxSize) {
+       super(maxSize, 0.75f, true); // accessOrder = true
+       this.maxSize = maxSize;
+   }
+
+   @Override
+   protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+       return size() > maxSize; // auto-remove oldest when full
+   }
+}
+```
+
+### # TreeMap
+
+Được xây dựng trên nền tảng `Red-Black Tree`, `TreeMap` buộc các `Key` phải triển khai `Comparable` hoặc cung cấp một `Comparator`
+tùy chỉnh. Nó không tỏa sáng ở thao tác `CRUD` đơn thuần `O(log n)`, mà thể hiện sức mạnh ở các tác vụ truy vấn
+phạm vi (`Range Queries`) như `subMap()`, `headMap()`, `floorKey()` hay `ceilingKey()`.
+
+```java
+TreeMap<String, Integer> map = new TreeMap<>();
+map.put("banana", 2);
+map.put("apple", 1);
+map.put("cherry", 3);
+// Iteration: apple → banana → cherry (natural order)
+
+// Custom comparator
+TreeMap<String, Integer> desc = new TreeMap<>(Comparator.reverseOrder());
+
+// Navigation methods
+map.firstKey();               // "apple"
+map.lastKey();                // "cherry"
+map.lowerKey("banana");       // "apple" (strictly less)
+map.floorKey("banana");       // "banana" (less or equal)
+map.ceilingKey("b");          // "banana" (greater or equal)
+map.higherKey("banana");      // "cherry" (strictly greater)
+map.subMap("apple", "cherry"); // [apple, banana) — exclusive end
+map.headMap("cherry");        // [apple, banana]
+map.tailMap("banana");        // [banana, cherry]
+```
+
+#### # complexity
+
+| Operation              | Complexity |
+| ---------------------- | ---------- |
+| put/get/remove         | O(log n)   |
+| firstKey/lastKey       | O(log n)   |
+| subMap/headMap/tailMap | O(log n)   |
+
+#### # khi nào dùng TreeMap
+
+- Cần keys sorted
+- Cần range queries (subMap, headMap, tailMap)
+- Cần navigation (floor, ceiling, lower, higher)
+- KHÔNG dùng khi chỉ cần O(1) lookup → dùng HashMap
+
+### # ConcurrentHashMap
+
+Trong môi trường đa luồng `(multi-threading)`, việc dùng `Collections.synchronizedMap()` là một cách làm chắp vá và kém
+hiệu quả vì nó áp dụng một khóa `(lock)` duy nhất lên toàn bộ đối tượng.
+
+`ConcurrentHashMap` giải quyết bài toán này bằng cơ chế phân mảnh tinh tế:
+
+- Java 7: Chia Map thành `16 segments`, mỗi `segment` quản lý một khóa riêng.
+- Java 8+: Tiến thêm một bước với `Node-level locking`. Sự kết hợp giữa các lệnh `Compare-And-Swap (CAS)` nguyên thủy
+  và khối `synchronized` chỉ áp dụng trên từng `bucket` đầu tiên. Các luồng `(threads)` khác nhau có thể ghi dữ liệu đồng thời
+  nếu dữ liệu rơi vào các `bucket` khác nhau.
+
+#### # java 8+ internal
+
+_**Cơ chế**_: Chia bảng băm thành nhiều `Segment` (mặc định 16). Mỗi `Segment` hoạt động như một bảng băm nhỏ và sở hữu một `Lock riêng` (ReentrantLock).
+Các thread ghi vào các `bucket` thuộc cùng một `Segment` vẫn phải đợi nhau.
+
+![segment-based-locking](/assets/img/blog/map/segment-based-locking.png)
+
+**Java 8+**: Node-Level Locking (Khóa theo từng Bucket)
+
+_**Cơ chế**_: Loại bỏ hoàn toàn lớp `Segment`. Sử dụng `CAS` (Compare-And-Swap)
+khi `bucket` trống và dùng `synchronized` trực tiếp trên `Node` đầu tiên của `bucket` đó nếu có va chạm (collision) →
+Các thread có thể ghi đồng thời vào các `bucket` khác nhau (table[0], table[1],...) mà hoàn toàn không block nhau!
+
+Vậy hiệu năng có gì khác biệt?
+
+- Java 7: Độ phân giải khóa `(Lock Granularity)` ở cấp `Segment`. Nếu cấu hình `16 segments` thì tối đa chỉ có `16 threads` ghi đồng thời.
+- Java 8+: Độ phân giải khóa ở cấp `Bucket` (từng ô trong mảng). Nếu mảng có kích thước `64`, `128` hoặc lớn hơn, số lượng thread có thể ghi đồng thời tăng lên tương ứng, giảm thiểu tối đa hiện tượng nghẽn cổ chai (`lock contention`).
+
+#### # key differences vs HashMap
+
+```java
+// KHÔNG cho phép null key hoặc null value (tránh ambiguity trong concurrent context)
+concurrentMap.put(null, "value");  // NullPointerException!
+concurrentMap.put("key", null);   // NullPointerException!
+
+// Atomic operations
+concurrentMap.putIfAbsent("key", "value");
+concurrentMap.computeIfAbsent("key", k -> expensiveComputation(k));
+concurrentMap.computeIfPresent("key", (k, v) -> v + 1);
+concurrentMap.merge("key", 1, Integer::sum); // atomic increment
+```
+
+#### # atomic compound operations
+
+```java
+// WRONG: check-then-act race condition
+if (!map.containsKey(key)) {
+   map.put(key, value); // another thread might put between check and put
+}
+
+// RIGHT: atomic
+map.putIfAbsent(key, value);
+map.computeIfAbsent(key, k -> createValue(k));
+```
+
+#### # vs Collections.synchronizedMap()
+
+```java
+// synchronizedMap: wraps entire map with single mutex → poor concurrency
+Map<K, V> syncMap = Collections.synchronizedMap(new HashMap<>());
+// Mọi operation lock toàn bộ map → 1 thread tại 1 thời điểm
+
+// ConcurrentHashMap: fine-grained locking → high concurrency
+ConcurrentHashMap<K, V> concMap = new ConcurrentHashMap<>();
+// Multiple threads đọc/ghi đồng thời (khác buckets)
+```
+
+### # WeakHashMap
+
+`Keys` là `WeakReference`. Khi `key` không còn strong reference → GC collect → entry tự xóa.
+
+```java
+WeakHashMap<Object, String> cache = new WeakHashMap<>();
+Object key = new Object();
+cache.put(key, "data");
+
+key = null; // no more strong reference to key
+System.gc(); // GC may collect the key
+// cache.size() có thể = 0 (entry bị remove)
+```
+
+**Use case:** Cache mà không muốn prevent GC (metadata cache, classloader cache).
+
+### # EnumMap
+
+Optimized cho enum keys. Dùng array internally (index = enum ordinal).
+
+```java
+enum Status { PENDING, ACTIVE, CLOSED }
+
+EnumMap<Status, List<Order>> ordersByStatus = new EnumMap<>(Status.class);
+ordersByStatus.put(Status.PENDING, pendingOrders);
+ordersByStatus.put(Status.ACTIVE, activeOrders);
+```
+
+- Nhanh hơn HashMap (array access, no hashing)
+- Memory efficient (no boxing, no Node objects)
+- Maintains enum declaration order
+
+### # IdentityHashMap
+
+Dùng `==` thay vì `equals()` cho key comparison. Dùng `System.identityHashCode()` thay vì `hashCode()`.
+
+```java
+IdentityHashMap<String, Integer> map = new IdentityHashMap<>();
+String a = new String("hello");
+String b = new String("hello");
+
+map.put(a, 1);
+map.put(b, 2);
+map.size(); // 2! (a != b dù a.equals(b))
+```
+
+**Use case:** Object graph traversal (track visited objects), serialization frameworks.
+
+### # so sánh tổng hợp
+
+| Map               | Order                       | Null Key | Null Value | Thread-safe | Complexity |
+| ----------------- | --------------------------- | -------- | ---------- | ----------- | ---------- |
+| HashMap           | None                        | 1        | Multiple   | No          | O(1)       |
+| LinkedHashMap     | Insertion/Access            | 1        | Multiple   | No          | O(1)       |
+| TreeMap           | Sorted (natural/comparator) | No       | Multiple   | No          | O(log n)   |
+| Hashtable         | None                        | No       | No         | Yes (slow)  | O(1)       |
+| ConcurrentHashMap | None                        | No       | No         | Yes (fast)  | O(1)       |
+| WeakHashMap       | None                        | 1        | Multiple   | No          | O(1)       |
+| EnumMap           | Enum declaration            | No       | Multiple   | No          | O(1)       |
+
+### # common patterns
+
+#### # frequency counting
+
+```java
+Map<String, Integer> freq = new HashMap<>();
+for (String word : words) {
+   freq.merge(word, 1, Integer::sum);
+}
+```
+
+#### # grouping
+
+```java
+Map<String, List<Order>> byStatus = orders.stream()
+   .collect(Collectors.groupingBy(Order::getStatus));
+```
+
+#### # compute pattern
+
+```java
+// computeIfAbsent: lazy initialization
+Map<String, List<String>> multimap = new HashMap<>();
+multimap.computeIfAbsent("key", k -> new ArrayList<>()).add("value");
+```
+
+#### # immutable maps
+
+```java
+// Java 9+
+Map<String, Integer> map = Map.of("a", 1, "b", 2, "c", 3);
+Map<String, Integer> map = Map.ofEntries(
+   Map.entry("a", 1),
+   Map.entry("b", 2)
+);
+
+// Unmodifiable view
+Map<String, Integer> unmod = Collections.unmodifiableMap(originalMap);
+```
+
+### # interview tips
+
+- HashMap resize: capacity doubles, rehash all entries, O(n)
+- HashMap vs Hashtable: null handling, synchronization, legacy
+- hashCode() contract: equals objects MUST have same hashCode
+- ConcurrentHashMap: CAS + synchronized per bucket (Java 8+)
+- TreeMap: Red-Black tree, O(log n), NavigableMap interface
+- LinkedHashMap: LRU cache với removeEldestEntry()
+- WeakHashMap: GC-friendly cache, keys are WeakReferences
+- Initial capacity: set nếu biết size trước (avoid resize)
+- Load factor 0.75: balance giữa space và time
+
+Hiểu rõ công cụ đang cầm trong tay chính là lằn ranh phân biệt giữa một người thợ gõ code và một kỹ sư phần mềm thực thụ. Hãy sử dụng Map một cách có chủ đích.
+
+> Chỉ là những ghi chép cá nhân với hy vọng mang lại chút giá trị. Nếu thấy hữu ích, đừng ngại chia sẻ cho bạn bè & đồng nghiệp nhé!
+
+Happy coding <Twemoji emoji="clinking-beer-mugs" /> 😎 👍🏻 🚀 🔥.
