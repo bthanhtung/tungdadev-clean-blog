@@ -2,7 +2,7 @@
 layout: post
 title: "Một vài cách Tối ưu SQL Query trong Oracle"
 date: 2024-01-18 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [SQL, Oracle]
 ---
 Trong lĩnh vực phát triển phần mềm, có thể rất nhiều lần chính bạn hoặc đồng nghiệp của bạn thốt lên rằng: _WTF code đã tối ưu thế này mà sao thời gian phản hồi api vẫn chậm?_ Đó là một vấn đề nhứt nhói, cần phải bắt tay vào tối ưu ngay lặp tức - SQL.

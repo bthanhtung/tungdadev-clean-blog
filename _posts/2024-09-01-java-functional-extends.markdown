@@ -2,7 +2,7 @@
 layout: post
 title: "Java Functional extends"
 date: 2024-09-01 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java, Functional Programming]
 ---
 

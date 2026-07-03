@@ -2,7 +2,7 @@
 layout: post
 title: "Builder Pattern trong Java"
 date: 2024-08-29 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java, Design Pattern]
 ---
 

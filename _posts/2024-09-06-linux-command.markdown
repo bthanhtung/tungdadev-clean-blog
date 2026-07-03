@@ -2,7 +2,7 @@
 layout: post
 title: "Hơn 100 lệnh Linux thường gặp"
 date: 2024-09-06 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Linix]
 ---
 

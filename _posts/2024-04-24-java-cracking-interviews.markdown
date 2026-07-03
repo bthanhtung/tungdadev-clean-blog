@@ -2,7 +2,7 @@
 layout: post
 title: "Java Craking Interviews"
 date: 2024-04-24 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java, Interview]
 ---
 

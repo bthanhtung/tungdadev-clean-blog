@@ -6,13 +6,9 @@
             <div class="copyright left mobile-block">
                     © {{ site.since }}
                     <span title="{{ site.author}}">{{ site.author }}</span>
-                    <a href="javascript:window.scrollTo(0,0)" class="right mobile-visible">TOP</a>
             </div>
 
             <ul class="site-footer-links right mobile-hidden">
-                <li>
-                    <a href="javascript:window.scrollTo(0,0)" >TOP</a>
-                </li>
             </ul>
             <a href="{{ site.github.repository_url }}" target="_blank" aria-label="view source code">
                 <span class="mega-octicon octicon-mark-github" title="GitHub"></span>
@@ -227,5 +223,65 @@ $(document).ready(function(){
         });
     </script>
 {% endif %}
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  var codeBlocks = document.querySelectorAll("div.highlight");
+  
+  codeBlocks.forEach(function(block) {
+    var wrapper = block.parentElement && block.parentElement.classList.contains("highlighter-rouge") ? block.parentElement : block;
+    
+    if (wrapper.style.position === 'static' || !wrapper.style.position) {
+      wrapper.style.position = "relative";
+    }
+    
+    var copyButton = document.createElement("button");
+    copyButton.className = "copy-code-btn";
+    copyButton.innerHTML = "Copy";
+    
+    wrapper.appendChild(copyButton);
+    
+    copyButton.addEventListener("click", function() {
+      var code = block.querySelector("code");
+      var text = code ? code.innerText : block.innerText;
+      
+      navigator.clipboard.writeText(text).then(function() {
+        copyButton.innerHTML = "Copied!";
+        setTimeout(function() {
+          copyButton.innerHTML = "Copy";
+        }, 2000);
+      }).catch(function(err) {
+        console.error('Could not copy text: ', err);
+      });
+    });
+  });
+});
+</script>
+<style>
+.copy-code-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background-color: rgba(255, 255, 255, 0.8);
+  color: #333;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+  z-index: 10;
+  opacity: 0;
+}
+div.highlighter-rouge:hover .copy-code-btn,
+div.highlight:hover .copy-code-btn,
+.copy-code-btn:focus {
+  opacity: 1;
+}
+.copy-code-btn:hover {
+  background-color: #f0f0f0;
+  color: #000;
+}
+</style>
 </body>
 </html>

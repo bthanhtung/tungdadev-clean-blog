@@ -2,7 +2,7 @@
 layout: post
 title: "Factory Method Pattern trong Java"
 date: 2024-08-28 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java, Design Pattern]
 ---
 

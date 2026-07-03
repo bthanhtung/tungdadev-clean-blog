@@ -2,7 +2,7 @@
 layout: post
 title: "You’re Not a Senior Software Engineer"
 date: 2024-07-24 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java]
 ---
 

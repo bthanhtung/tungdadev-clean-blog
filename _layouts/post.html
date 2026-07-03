@@ -48,15 +48,34 @@ layout: default
     {% include content-header-ad.html %}
     <article class="article-content markdown-body">
     {{ content }}
-    {% include copyright.html %}
-    </article>
+    <div class="post-nav" style="display: flex; justify-content: space-between; margin-top: 2em; padding-top: 1em; border-top: 1px solid #eee; font-weight: bold;">
+      {% if page.previous.url %}
+        <a href="{{ page.previous.url | prepend: site.url }}" class="prev-post">
+          &laquo; {{ page.previous.title }}
+        </a>
+      {% else %}
+        <span></span>
+      {% endif %}
+
+      {% if page.next.url %}
+        <a href="{{ page.next.url | prepend: site.url }}" class="next-post">
+          {{ page.next.title }} &raquo;
+        </a>
+      {% else %}
+        <span></span>
+      {% endif %}
+    </div>    </article>
+    {% if site.components.share.enabled %}
     <div class="share">
       {% include sns-share.html %}
     </div>
+    {% endif %}
     {% include content-footer-ad.html %}
+    {% if site.comments_provider and page.comments != false %}
     <div class="comment">
       {% include comments.html %}
     </div>
+    {% endif %}
   </div>
   <div class="column one-fourth">
     {% include sidebar-search.html %}

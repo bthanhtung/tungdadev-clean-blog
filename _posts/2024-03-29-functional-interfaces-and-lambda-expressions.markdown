@@ -2,7 +2,7 @@
 layout: post
 title: "Functional Interfaces & Lambda Expressions trong Java"
 date: 2024-03-26 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java]
 ---
 

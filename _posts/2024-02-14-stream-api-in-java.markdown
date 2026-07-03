@@ -2,7 +2,7 @@
 layout: post
 title: "Java Stream API"
 date: 2024-02-14 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java]
 ---
 

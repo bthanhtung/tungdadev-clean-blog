@@ -2,7 +2,7 @@
 layout: post
 title: "Docker basic"
 date: 2024-09-03 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Docker]
 ---
 

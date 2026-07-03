@@ -2,7 +2,7 @@
 layout: post
 title: "Java Optional"
 date: 2024-03-26 19:29:39 +0700
-categories: [Information Technology, Software]
+categories: [Software Development]
 tags: [Java]
 ---
 
