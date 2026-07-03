@@ -2,8 +2,7 @@
 #   Main Configs   #
 # ---------------- #
 baseurl: ""
-#url: https://cristorvalds.netlify.app
-url: "http://localhost:4000"
+url: "https://cristorvalds.netlify.app"
 date_format: "ordinal"
 title: CrisTorvalds
 subtitle: "CRIS TORVALDS"
